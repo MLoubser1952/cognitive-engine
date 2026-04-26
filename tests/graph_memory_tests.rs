@@ -1349,3 +1349,117 @@ fn test_relationship_with_effective_strength() {
         effective_edge.strength
     );
 }
+
+// =============================================================================
+// Phase 1 (cognitive-engine): typed-edge directional/bidirectional helpers
+// =============================================================================
+
+#[test]
+fn test_outgoing_edges_excludes_incoming() {
+    let (graph, _temp_dir) = setup_graph_memory();
+
+    let a = graph
+        .add_entity(create_entity("A", None, false, 0.5))
+        .unwrap();
+    let b = graph
+        .add_entity(create_entity("B", None, false, 0.5))
+        .unwrap();
+
+    // A --Causes--> B (directed)
+    graph
+        .add_relationship(create_relationship(a, b, RelationType::Causes, 0.8))
+        .unwrap();
+
+    let outgoing_a = graph.outgoing_edges(&a).unwrap();
+    assert_eq!(outgoing_a.len(), 1);
+    assert_eq!(outgoing_a[0].from_entity, a);
+
+    let outgoing_b = graph.outgoing_edges(&b).unwrap();
+    assert!(
+        outgoing_b.is_empty(),
+        "B has only an incoming edge — outgoing_edges should be empty"
+    );
+
+    let incoming_b = graph.incoming_edges(&b).unwrap();
+    assert_eq!(incoming_b.len(), 1);
+    assert_eq!(incoming_b[0].to_entity, b);
+}
+
+#[test]
+fn test_outgoing_with_bidirectional_includes_symmetric_incoming() {
+    let (graph, _temp_dir) = setup_graph_memory();
+
+    let a = graph
+        .add_entity(create_entity("A", None, false, 0.5))
+        .unwrap();
+    let b = graph
+        .add_entity(create_entity("B", None, false, 0.5))
+        .unwrap();
+
+    // A --WorksWith--> B (symmetric)
+    graph
+        .add_relationship(create_relationship(a, b, RelationType::WorksWith, 0.7))
+        .unwrap();
+
+    // Strict outgoing from B is empty
+    assert!(graph.outgoing_edges(&b).unwrap().is_empty());
+
+    // Bidirectional view from B should surface the WorksWith edge
+    let bidir = graph.outgoing_with_bidirectional(&b).unwrap();
+    assert_eq!(bidir.len(), 1);
+    assert_eq!(bidir[0].relation_type, RelationType::WorksWith);
+}
+
+#[test]
+fn test_outgoing_with_bidirectional_skips_directed_incoming() {
+    let (graph, _temp_dir) = setup_graph_memory();
+
+    let a = graph
+        .add_entity(create_entity("A", None, false, 0.5))
+        .unwrap();
+    let b = graph
+        .add_entity(create_entity("B", None, false, 0.5))
+        .unwrap();
+
+    // A --PartOf--> B (PartOf is directed: A is part of B; B does not roll up to A)
+    graph
+        .add_relationship(create_relationship(a, b, RelationType::PartOf, 0.9))
+        .unwrap();
+
+    let bidir = graph.outgoing_with_bidirectional(&b).unwrap();
+    assert!(
+        bidir.is_empty(),
+        "Directed PartOf edge should not surface from B's bidirectional view"
+    );
+}
+
+#[test]
+fn test_contradicts_edge_round_trips_through_storage() {
+    let (graph, _temp_dir) = setup_graph_memory();
+
+    let claim_a = graph
+        .add_entity(create_entity("ClaimA", None, false, 0.5))
+        .unwrap();
+    let claim_b = graph
+        .add_entity(create_entity("ClaimB", None, false, 0.5))
+        .unwrap();
+
+    graph
+        .add_relationship(create_relationship(
+            claim_a,
+            claim_b,
+            RelationType::Contradicts,
+            0.95,
+        ))
+        .unwrap();
+
+    let edges_a = graph.get_entity_relationships(&claim_a).unwrap();
+    assert_eq!(edges_a.len(), 1);
+    assert_eq!(edges_a[0].relation_type, RelationType::Contradicts);
+
+    // Contradicts is symmetric — both endpoints should see it as a neighbour
+    let bidir_a = graph.outgoing_with_bidirectional(&claim_a).unwrap();
+    let bidir_b = graph.outgoing_with_bidirectional(&claim_b).unwrap();
+    assert_eq!(bidir_a.len(), 1);
+    assert_eq!(bidir_b.len(), 1);
+}

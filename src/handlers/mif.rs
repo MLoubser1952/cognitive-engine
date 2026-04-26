@@ -439,6 +439,17 @@ pub async fn add_relationship(
         "Knows" => graph_memory::RelationType::Knows,
         "Teaches" => graph_memory::RelationType::Teaches,
         "CoRetrieved" => graph_memory::RelationType::CoRetrieved,
+        "CoOccurs" => graph_memory::RelationType::CoOccurs,
+        "Inhibits" => graph_memory::RelationType::Inhibits,
+        "Enables" => graph_memory::RelationType::Enables,
+        "Amplifies" => graph_memory::RelationType::Amplifies,
+        "Contradicts" => graph_memory::RelationType::Contradicts,
+        "Supports" => graph_memory::RelationType::Supports,
+        "IsInstanceOf" => graph_memory::RelationType::IsInstanceOf,
+        "GeneralisesTo" | "GeneralizesTo" => graph_memory::RelationType::GeneralisesTo,
+        "Preceded" => graph_memory::RelationType::Preceded,
+        "Triggered" => graph_memory::RelationType::Triggered,
+        "CoincidedWith" => graph_memory::RelationType::CoincidedWith,
         _ => graph_memory::RelationType::Custom(req.relation_type.clone()),
     };
 

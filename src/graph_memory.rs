@@ -870,6 +870,9 @@ pub enum RelationType {
     /// Causal relationships
     Causes,
     ResultsIn,
+    Inhibits,
+    Enables,
+    Amplifies,
 
     /// Learning relationships
     Learned,
@@ -887,8 +890,34 @@ pub enum RelationType {
     /// Key for multi-hop: "Melanie" <-> "sunrise" when "Melanie painted a sunrise"
     CoOccurs,
 
+    /// Meta relationships (cognitive-engine extension): epistemic links
+    /// between memories rather than between worldly entities. Required for
+    /// contradiction preservation, hypothesis support, and ontology rollups.
+    Contradicts,
+    Supports,
+    IsInstanceOf,
+    GeneralisesTo,
+
+    /// Temporal relationships (cognitive-engine extension)
+    Preceded,
+    Triggered,
+    CoincidedWith,
+
     /// Custom relationship
     Custom(String),
+}
+
+/// Coarse semantic grouping for [`RelationType`]. Used for filtering,
+/// reporting, and bidirectional-traversal policy without breaking the
+/// flat-enum public API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EdgeCategory {
+    Structural,
+    Causal,
+    Temporal,
+    Meta,
+    Hebbian,
+    Generic,
 }
 
 impl RelationType {
@@ -909,6 +938,9 @@ impl RelationType {
             Self::DevelopedBy => "DevelopedBy",
             Self::Causes => "Causes",
             Self::ResultsIn => "ResultsIn",
+            Self::Inhibits => "Inhibits",
+            Self::Enables => "Enables",
+            Self::Amplifies => "Amplifies",
             Self::Learned => "Learned",
             Self::Knows => "Knows",
             Self::Teaches => "Teaches",
@@ -916,7 +948,89 @@ impl RelationType {
             Self::AssociatedWith => "AssociatedWith",
             Self::CoRetrieved => "CoRetrieved",
             Self::CoOccurs => "CoOccurs",
+            Self::Contradicts => "Contradicts",
+            Self::Supports => "Supports",
+            Self::IsInstanceOf => "IsInstanceOf",
+            Self::GeneralisesTo => "GeneralisesTo",
+            Self::Preceded => "Preceded",
+            Self::Triggered => "Triggered",
+            Self::CoincidedWith => "CoincidedWith",
             Self::Custom(s) => s.as_str(),
+        }
+    }
+
+    /// Coarse grouping used for filtering and reporting. Pure metadata —
+    /// the underlying enum stays flat to keep the public API stable.
+    pub fn category(&self) -> EdgeCategory {
+        match self {
+            Self::WorksWith
+            | Self::WorksAt
+            | Self::EmployedBy
+            | Self::PartOf
+            | Self::Contains
+            | Self::OwnedBy
+            | Self::LocatedIn
+            | Self::LocatedAt
+            | Self::Uses
+            | Self::CreatedBy
+            | Self::DevelopedBy => EdgeCategory::Structural,
+
+            Self::Causes
+            | Self::ResultsIn
+            | Self::Inhibits
+            | Self::Enables
+            | Self::Amplifies => EdgeCategory::Causal,
+
+            Self::Preceded | Self::Triggered | Self::CoincidedWith => EdgeCategory::Temporal,
+
+            Self::Contradicts
+            | Self::Supports
+            | Self::IsInstanceOf
+            | Self::GeneralisesTo => EdgeCategory::Meta,
+
+            Self::CoRetrieved | Self::CoOccurs => EdgeCategory::Hebbian,
+
+            Self::Learned
+            | Self::Knows
+            | Self::Teaches
+            | Self::RelatedTo
+            | Self::AssociatedWith
+            | Self::Custom(_) => EdgeCategory::Generic,
+        }
+    }
+
+    /// True for relations whose semantics are symmetric — querying
+    /// neighbours of either endpoint should surface the other regardless
+    /// of which direction the edge was originally written.
+    pub fn is_bidirectional(&self) -> bool {
+        matches!(
+            self,
+            Self::WorksWith
+                | Self::RelatedTo
+                | Self::AssociatedWith
+                | Self::CoRetrieved
+                | Self::CoOccurs
+                | Self::Contradicts
+                | Self::CoincidedWith
+        )
+    }
+
+    /// Returns the inverse relation when one exists in the vocabulary.
+    /// `Contradicts` is its own inverse (symmetric); `PartOf`/`Contains`,
+    /// `Causes`/`ResultsIn`, `IsInstanceOf`/`GeneralisesTo`, and
+    /// `Teaches`/`Learned` form directed pairs.
+    pub fn opposite(&self) -> Option<RelationType> {
+        match self {
+            Self::PartOf => Some(Self::Contains),
+            Self::Contains => Some(Self::PartOf),
+            Self::Causes => Some(Self::ResultsIn),
+            Self::ResultsIn => Some(Self::Causes),
+            Self::IsInstanceOf => Some(Self::GeneralisesTo),
+            Self::GeneralisesTo => Some(Self::IsInstanceOf),
+            Self::Teaches => Some(Self::Learned),
+            Self::Learned => Some(Self::Teaches),
+            Self::Contradicts => Some(Self::Contradicts),
+            _ => None,
         }
     }
 }
@@ -2262,6 +2376,44 @@ impl GraphMemory {
         }
 
         Ok(edges)
+    }
+
+    /// Strictly outgoing edges where the entity is the `from_entity` endpoint.
+    /// Use when direction matters — e.g. "what does this node point to?"
+    pub fn outgoing_edges(&self, entity_uuid: &Uuid) -> Result<Vec<RelationshipEdge>> {
+        let edges = self.get_entity_relationships(entity_uuid)?;
+        Ok(edges
+            .into_iter()
+            .filter(|e| &e.from_entity == entity_uuid)
+            .collect())
+    }
+
+    /// Strictly incoming edges where the entity is the `to_entity` endpoint.
+    pub fn incoming_edges(&self, entity_uuid: &Uuid) -> Result<Vec<RelationshipEdge>> {
+        let edges = self.get_entity_relationships(entity_uuid)?;
+        Ok(edges
+            .into_iter()
+            .filter(|e| &e.to_entity == entity_uuid)
+            .collect())
+    }
+
+    /// Outgoing edges plus any incoming edges whose [`RelationType`] is
+    /// declared bidirectional (e.g. `WorksWith`, `RelatedTo`, `Contradicts`).
+    /// This is the standard helper for "give me everything the caller would
+    /// reasonably expect to see when asking for this node's neighbours" —
+    /// directional relations are honoured, symmetric ones flow either way.
+    pub fn outgoing_with_bidirectional(
+        &self,
+        entity_uuid: &Uuid,
+    ) -> Result<Vec<RelationshipEdge>> {
+        let edges = self.get_entity_relationships(entity_uuid)?;
+        Ok(edges
+            .into_iter()
+            .filter(|e| {
+                &e.from_entity == entity_uuid
+                    || (&e.to_entity == entity_uuid && e.relation_type.is_bidirectional())
+            })
+            .collect())
     }
 
     /// Calculate edge density for a specific entity (SHO-D5)
@@ -6491,5 +6643,133 @@ mod tests {
         assert!(strength.is_some());
         let s = strength.unwrap();
         assert!(s > 0.75 && s <= 0.8, "Strength should be ~0.8, got {}", s);
+    }
+
+    // === Phase 1 (cognitive-engine): typed-edge vocabulary ===
+
+    #[test]
+    fn relation_type_new_variants_have_as_str() {
+        let cases = [
+            (RelationType::Inhibits, "Inhibits"),
+            (RelationType::Enables, "Enables"),
+            (RelationType::Amplifies, "Amplifies"),
+            (RelationType::Contradicts, "Contradicts"),
+            (RelationType::Supports, "Supports"),
+            (RelationType::IsInstanceOf, "IsInstanceOf"),
+            (RelationType::GeneralisesTo, "GeneralisesTo"),
+            (RelationType::Preceded, "Preceded"),
+            (RelationType::Triggered, "Triggered"),
+            (RelationType::CoincidedWith, "CoincidedWith"),
+        ];
+        for (rt, expected) in cases {
+            assert_eq!(rt.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn relation_type_category_partitions_vocabulary() {
+        // Causal
+        assert_eq!(RelationType::Causes.category(), EdgeCategory::Causal);
+        assert_eq!(RelationType::Inhibits.category(), EdgeCategory::Causal);
+        assert_eq!(RelationType::Enables.category(), EdgeCategory::Causal);
+        assert_eq!(RelationType::Amplifies.category(), EdgeCategory::Causal);
+        // Meta
+        assert_eq!(RelationType::Contradicts.category(), EdgeCategory::Meta);
+        assert_eq!(RelationType::Supports.category(), EdgeCategory::Meta);
+        assert_eq!(RelationType::IsInstanceOf.category(), EdgeCategory::Meta);
+        assert_eq!(RelationType::GeneralisesTo.category(), EdgeCategory::Meta);
+        // Temporal
+        assert_eq!(RelationType::Preceded.category(), EdgeCategory::Temporal);
+        assert_eq!(RelationType::Triggered.category(), EdgeCategory::Temporal);
+        assert_eq!(
+            RelationType::CoincidedWith.category(),
+            EdgeCategory::Temporal
+        );
+        // Hebbian
+        assert_eq!(RelationType::CoRetrieved.category(), EdgeCategory::Hebbian);
+        assert_eq!(RelationType::CoOccurs.category(), EdgeCategory::Hebbian);
+        // Structural
+        assert_eq!(RelationType::PartOf.category(), EdgeCategory::Structural);
+        assert_eq!(RelationType::Contains.category(), EdgeCategory::Structural);
+    }
+
+    #[test]
+    fn relation_type_is_bidirectional_matches_spec() {
+        // Symmetric relations
+        assert!(RelationType::WorksWith.is_bidirectional());
+        assert!(RelationType::RelatedTo.is_bidirectional());
+        assert!(RelationType::AssociatedWith.is_bidirectional());
+        assert!(RelationType::CoRetrieved.is_bidirectional());
+        assert!(RelationType::CoOccurs.is_bidirectional());
+        assert!(RelationType::Contradicts.is_bidirectional());
+        assert!(RelationType::CoincidedWith.is_bidirectional());
+        // Directed relations
+        assert!(!RelationType::Causes.is_bidirectional());
+        assert!(!RelationType::PartOf.is_bidirectional());
+        assert!(!RelationType::Contains.is_bidirectional());
+        assert!(!RelationType::IsInstanceOf.is_bidirectional());
+        assert!(!RelationType::Preceded.is_bidirectional());
+        assert!(!RelationType::Triggered.is_bidirectional());
+        assert!(!RelationType::Inhibits.is_bidirectional());
+    }
+
+    #[test]
+    fn relation_type_opposite_pairs_invert() {
+        assert_eq!(
+            RelationType::PartOf.opposite(),
+            Some(RelationType::Contains)
+        );
+        assert_eq!(
+            RelationType::Contains.opposite(),
+            Some(RelationType::PartOf)
+        );
+        assert_eq!(
+            RelationType::Causes.opposite(),
+            Some(RelationType::ResultsIn)
+        );
+        assert_eq!(
+            RelationType::IsInstanceOf.opposite(),
+            Some(RelationType::GeneralisesTo)
+        );
+        assert_eq!(
+            RelationType::GeneralisesTo.opposite(),
+            Some(RelationType::IsInstanceOf)
+        );
+        assert_eq!(
+            RelationType::Teaches.opposite(),
+            Some(RelationType::Learned)
+        );
+        // Symmetric self-inverse
+        assert_eq!(
+            RelationType::Contradicts.opposite(),
+            Some(RelationType::Contradicts)
+        );
+        // Variants without a defined inverse return None
+        assert_eq!(RelationType::Inhibits.opposite(), None);
+        assert_eq!(RelationType::WorksWith.opposite(), None);
+        assert_eq!(RelationType::Triggered.opposite(), None);
+    }
+
+    #[test]
+    fn relation_type_serde_roundtrip_for_new_variants() {
+        for rt in [
+            RelationType::Inhibits,
+            RelationType::Enables,
+            RelationType::Amplifies,
+            RelationType::Contradicts,
+            RelationType::Supports,
+            RelationType::IsInstanceOf,
+            RelationType::GeneralisesTo,
+            RelationType::Preceded,
+            RelationType::Triggered,
+            RelationType::CoincidedWith,
+        ] {
+            let bytes = bincode::serde::encode_to_vec(&rt, bincode::config::standard())
+                .expect("encode should succeed");
+            let (decoded, _): (RelationType, _) =
+                bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                    .expect("decode should succeed");
+            assert_eq!(rt, decoded);
+        }
     }
 }

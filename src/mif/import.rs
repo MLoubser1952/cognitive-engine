@@ -473,6 +473,18 @@ pub(crate) fn parse_relation_type(s: &str) -> RelationType {
         "associated_with" | "associatedwith" => RelationType::AssociatedWith,
         "co_retrieved" | "coretrieved" => RelationType::CoRetrieved,
         "co_occurs" | "cooccurs" => RelationType::CoOccurs,
+        "inhibits" => RelationType::Inhibits,
+        "enables" => RelationType::Enables,
+        "amplifies" => RelationType::Amplifies,
+        "contradicts" => RelationType::Contradicts,
+        "supports" => RelationType::Supports,
+        "is_instance_of" | "isinstanceof" => RelationType::IsInstanceOf,
+        "generalises_to" | "generalisesto" | "generalizes_to" | "generalizesto" => {
+            RelationType::GeneralisesTo
+        }
+        "preceded" => RelationType::Preceded,
+        "triggered" => RelationType::Triggered,
+        "coincided_with" | "coincidedwith" => RelationType::CoincidedWith,
         other => RelationType::Custom(other.to_string()),
     }
 }

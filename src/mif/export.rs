@@ -528,6 +528,16 @@ fn relation_type_to_string(r: &crate::graph_memory::RelationType) -> String {
         RelationType::AssociatedWith => "associated_with",
         RelationType::CoRetrieved => "co_retrieved",
         RelationType::CoOccurs => "co_occurs",
+        RelationType::Inhibits => "inhibits",
+        RelationType::Enables => "enables",
+        RelationType::Amplifies => "amplifies",
+        RelationType::Contradicts => "contradicts",
+        RelationType::Supports => "supports",
+        RelationType::IsInstanceOf => "is_instance_of",
+        RelationType::GeneralisesTo => "generalises_to",
+        RelationType::Preceded => "preceded",
+        RelationType::Triggered => "triggered",
+        RelationType::CoincidedWith => "coincided_with",
         RelationType::Custom(s) => return s.to_lowercase(),
     }
     .to_string()
