@@ -52,6 +52,18 @@ No source code modifications yet.
 
 **Compatibility:** No RocksDB schema migration required — serde-encoded `RelationType` round-trips because we only added variants. Existing stores keep working. Phase 2 (directionality) was absorbed into this PR because the spike confirmed it was already done at v0.1.90; the only remaining directionality work was the `outgoing_with_bidirectional()` helper, which now lives here.
 
+### 2026-04-26 — Phase 3: Per-type decay with floors
+
+**Files touched:**
+- `src/decay.rs` — added `DecayParams` struct (`crossover_days`, `lambda`, `beta`, `floor`), `DecayConfig` struct (`default` + `per_edge_category: HashMap<EdgeCategory, DecayParams>`), `decay_factor_with_params()` function that applies the configured floor as a clamp, JSON `from_json_str`/`from_file` loaders, plus 7 unit tests covering default-matches-upstream, floor-clamping under long inactivity, fresh-memory-not-lifted, lookup fallback, per-category divergence, JSON roundtrip, and JSON partial override.
+- `src/graph_memory.rs` — added `Hash` derive to `EdgeCategory` so it can be used as a `HashMap` key.
+
+**Summary:** Adds an opt-in API for per-edge-category decay parameters with structural-importance floors. The floor mechanic is the load-bearing addition: once a node/edge has been classified as structurally important (e.g. a Causal chokepoint), its decayed score cannot drop below the configured floor regardless of access pattern. The default `DecayConfig` is byte-equivalent to upstream's `hybrid_decay_factor` curve (no floor, λ=0.693, β=0.5, crossover=3 days), so callers that don't opt in see no behaviour change. Config loads via JSON; `serde_json` was already a dependency, so no new crate needed.
+
+**Why:** Spec Section 3.3 mod #3 calls for per-type decay so that — for example — Causal evidence can decay slower than transient Co-Retrieved Hebbian links, and Structural backbone nodes never disappear. Floors exist because biological brains protect chokepoints structurally; the cognitive engine needs the same so that Tier 2 audit trail and hypothesis register cannot lose their anchor edges.
+
+**Compatibility:** Pure addition. Upstream `hybrid_decay_factor` and `tier_decay_factor` are untouched; new entry points are opt-in. No RocksDB schema change. JSON config files are optional — when absent, behaviour is identical to upstream.
+
 ---
 
 ## Provenance

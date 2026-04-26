@@ -910,7 +910,7 @@ pub enum RelationType {
 /// Coarse semantic grouping for [`RelationType`]. Used for filtering,
 /// reporting, and bidirectional-traversal policy without breaking the
 /// flat-enum public API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EdgeCategory {
     Structural,
     Causal,

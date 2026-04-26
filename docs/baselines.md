@@ -135,3 +135,20 @@ Phase 1 (edge-typing vocabulary extension) ran cleanly against criterion's store
 | retrieve_memories/10 | 2.37 ms | ~0% (p high) | no change |
 
 Conclusion: Phase 1 within budget. The static-doc graph_traversal numbers are the only Phase 0 capture that drifted enough to look like a regression on point-estimate comparison; criterion's stored Phase 0 run was already higher than the doc snapshot, and the run-to-run delta is non-significant.
+
+## Phase 3 verification — 2026-04-26
+
+Phase 3 (per-type decay with floors) is a pure addition — no upstream code path was modified, so no perf change was expected. The first bench run flagged graph_entity_get/100 +23.8% and graph_entity_get/1000 +35.8% (both p < 0.05), but this was thermal noise: the bench ran immediately after a 6-minute `cargo test --release --no-fail-fast` that left the M-series CPU hot. After a 30-second cooldown, the same two benches re-ran at 615.65 ns and 697.06 ns respectively — within 1% of the Phase 0 measured baseline (622 ns / 699 ns). Logged here so future me does not repeat the misdiagnosis: **always cool the bench host between heavy test loads and benches.**
+
+| Bench | Phase 3 median (cooled re-run) | criterion delta vs stored | criterion verdict |
+|---|---|---|---|
+| graph_entity_get/100 | 615.65 ns | -20.6% (p=0.00) | improved (recovered from hot baseline) |
+| graph_entity_get/1000 | 697.06 ns | -27.1% (p=0.00) | improved (recovered from hot baseline) |
+| graph_traversal/1 | 66.52 µs | +0.2% (p=0.96) | no change |
+| graph_traversal/2 | 131.96 µs | +1.6% (p=0.81) | no change |
+| graph_traversal/3 | 187.32 µs | +1.1% (p=0.89) | no change |
+| record_experience/100 | 2.31 µs | +6.1% (p=0.00) | within budget (<10%) |
+| retrieve_memories/10 | 2.50 ms | +3.4% (p=0.00) | within budget (<10%) |
+| vector_search/25 | 2.44 ms | +2.8% (p=0.00) | within budget (<10%) |
+
+Conclusion: Phase 3 within budget. No Tier 1 perf change attributable to the decay code.

@@ -50,6 +50,9 @@
 use crate::constants::{
     DECAY_CROSSOVER_DAYS, DECAY_LAMBDA_CONSOLIDATION, POWERLAW_BETA, POWERLAW_BETA_POTENTIATED,
 };
+use crate::graph_memory::EdgeCategory;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Calculates the hybrid decay factor for a given elapsed time.
 ///
@@ -240,6 +243,131 @@ pub fn tier_decay_factor(hours_elapsed: f64, tier: u8, ltp_decay_factor: f32) ->
     (decay_factor.max(0.001), should_prune)
 }
 
+// =============================================================================
+// Phase 3 (cognitive-engine): per-type decay configuration with floors
+// =============================================================================
+//
+// Upstream Shodh decay is a single global model — every edge and every node
+// uses the same `(crossover, lambda, beta)`. Tier 1 needs different decay
+// schedules per edge category and (post-Phase-4) per node ontology type, plus
+// **decay floors** that pin structurally important memories above a minimum
+// retention regardless of inactivity. Phase 3 adds the configuration surface
+// and a floor-aware decay function. Existing call sites are unchanged — they
+// keep using `hybrid_decay_factor`. Callers that want per-type behaviour opt
+// in via `DecayConfig::params_for_edge_category()` + `decay_factor_with_params`.
+
+/// Per-type decay parameters. Mirrors the three knobs of the hybrid model
+/// — exponential consolidation phase length, exponential rate, power-law
+/// exponent — and adds a `floor`: the minimum retention multiplier the
+/// decay function will ever return for this type. A floor of `0.0` means
+/// "no floor"; `0.5` means "this type retains at least 50% of its current
+/// strength regardless of how long it has been inactive."
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DecayParams {
+    /// Days before decay switches from exponential to power-law (≈ 3.0 in upstream).
+    pub crossover_days: f64,
+    /// Exponential rate during the consolidation phase (≈ 0.693 in upstream).
+    pub lambda: f64,
+    /// Power-law exponent during the long-term phase (≈ 0.5 in upstream).
+    pub beta: f64,
+    /// Minimum retention factor (0.0 = no floor, 1.0 = no decay at all).
+    /// Acts as a clamp: `result = max(computed_decay, floor)`.
+    pub floor: f32,
+}
+
+impl DecayParams {
+    /// Default parameters that reproduce the upstream `hybrid_decay_factor`
+    /// behaviour for non-potentiated edges. Used for any edge category
+    /// without an explicit override in [`DecayConfig`].
+    pub const fn upstream_default() -> Self {
+        Self {
+            crossover_days: DECAY_CROSSOVER_DAYS,
+            lambda: DECAY_LAMBDA_CONSOLIDATION,
+            beta: POWERLAW_BETA,
+            floor: 0.0,
+        }
+    }
+
+    /// Default parameters that reproduce the upstream potentiated curve.
+    pub const fn upstream_potentiated() -> Self {
+        Self {
+            crossover_days: DECAY_CROSSOVER_DAYS,
+            lambda: DECAY_LAMBDA_CONSOLIDATION * 0.5,
+            beta: POWERLAW_BETA_POTENTIATED,
+            floor: 0.0,
+        }
+    }
+}
+
+impl Default for DecayParams {
+    fn default() -> Self {
+        Self::upstream_default()
+    }
+}
+
+/// Decay configuration: a default that mirrors upstream and a per-edge-category
+/// override map. Loadable from TOML/JSON via [`DecayConfig::from_toml_str`].
+///
+/// Node-type overrides are deferred to Phase 4 (ontology tags) — once
+/// `NodeType` exists, this struct will gain a `per_node_type` map. Until
+/// then the `default` covers all nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecayConfig {
+    /// Used when no override matches. Reproduces upstream behaviour by default.
+    #[serde(default)]
+    pub default: DecayParams,
+
+    /// Per-edge-category overrides. Anything absent falls back to `default`.
+    #[serde(default)]
+    pub per_edge_category: HashMap<EdgeCategory, DecayParams>,
+}
+
+impl Default for DecayConfig {
+    fn default() -> Self {
+        Self {
+            default: DecayParams::upstream_default(),
+            per_edge_category: HashMap::new(),
+        }
+    }
+}
+
+impl DecayConfig {
+    /// Look up the params for an edge category, falling back to `default`.
+    pub fn params_for_edge_category(&self, category: EdgeCategory) -> DecayParams {
+        self.per_edge_category
+            .get(&category)
+            .copied()
+            .unwrap_or(self.default)
+    }
+
+    /// Parse a `DecayConfig` from a JSON string. Useful for `--decay-config`
+    /// CLI flags and for inline test configs. JSON was chosen over TOML so
+    /// the engine doesn't grow a new dependency just for config loading —
+    /// `serde_json` is already in the build graph.
+    pub fn from_json_str(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+
+    /// Read a `DecayConfig` from a JSON file on disk.
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let contents = std::fs::read_to_string(path)?;
+        Self::from_json_str(&contents)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+}
+
+/// Hybrid decay with explicit per-type params and a retention floor.
+///
+/// Returns a value in `[params.floor, 1.0]`. The shape of the curve below
+/// the floor is identical to [`hybrid_decay_factor_custom`]; the floor is
+/// applied as a `max` clamp at the very end.
+#[inline]
+pub fn decay_factor_with_params(days_elapsed: f64, params: &DecayParams) -> f32 {
+    let raw =
+        hybrid_decay_factor_custom(days_elapsed, params.crossover_days, params.lambda, params.beta);
+    raw.max(params.floor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +490,151 @@ mod tests {
         let (invalid_tier, _) = tier_decay_factor(24.0, 9, 1.0);
         let (l3, _) = tier_decay_factor(24.0, 2, 1.0);
         assert_eq!(invalid_tier, l3);
+    }
+
+    // === Phase 3: per-type decay configuration with floors ===
+
+    #[test]
+    fn decay_params_default_matches_upstream_curve() {
+        // The default DecayParams must reproduce the upstream
+        // `hybrid_decay_factor(_, false)` curve exactly — otherwise
+        // existing call sites that adopt the new API would silently change
+        // behaviour.
+        let params = DecayParams::default();
+        for &days in &[0.0, 0.5, 1.0, 2.99, 3.0, 7.0, 30.0, 365.0] {
+            let upstream = hybrid_decay_factor(days, false);
+            let phase3 = decay_factor_with_params(days, &params);
+            assert!(
+                (upstream - phase3).abs() < 1e-6,
+                "Default params should match upstream at day {days}: upstream={upstream}, phase3={phase3}"
+            );
+        }
+    }
+
+    #[test]
+    fn decay_floor_clamps_long_inactivity() {
+        // After a year of inactivity, the raw curve drops well below 10%.
+        // With a 0.5 floor it must clamp at exactly 0.5.
+        let raw = hybrid_decay_factor(365.0, false);
+        assert!(
+            raw < 0.5,
+            "Sanity: raw 1-year retention should be below the 0.5 floor (got {raw})"
+        );
+
+        let with_floor = decay_factor_with_params(
+            365.0,
+            &DecayParams {
+                floor: 0.5,
+                ..DecayParams::default()
+            },
+        );
+        assert!((with_floor - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn decay_floor_does_not_lift_fresh_memories() {
+        // Floor only applies to decayed values — at t=0, retention is 1.0
+        // and the floor must not pull it down or up artificially.
+        let fresh = decay_factor_with_params(
+            0.0,
+            &DecayParams {
+                floor: 0.5,
+                ..DecayParams::default()
+            },
+        );
+        assert_eq!(fresh, 1.0);
+    }
+
+    #[test]
+    fn decay_config_lookup_falls_back_to_default() {
+        let mut config = DecayConfig::default();
+        config.per_edge_category.insert(
+            EdgeCategory::Meta,
+            DecayParams {
+                floor: 0.7,
+                ..DecayParams::default()
+            },
+        );
+
+        // Configured category gets its override
+        let meta_params = config.params_for_edge_category(EdgeCategory::Meta);
+        assert_eq!(meta_params.floor, 0.7);
+
+        // Unconfigured category falls back
+        let causal_params = config.params_for_edge_category(EdgeCategory::Causal);
+        assert_eq!(causal_params, DecayParams::default());
+    }
+
+    #[test]
+    fn decay_config_per_category_diverges() {
+        // Cognitive-engine motivating example: Meta::Contradicts edges should
+        // decay slower (β=0.2, floor=0.4) so contradictions are not erased
+        // by long inactivity.
+        let mut config = DecayConfig::default();
+        config.per_edge_category.insert(
+            EdgeCategory::Meta,
+            DecayParams {
+                crossover_days: 3.0,
+                lambda: 0.693,
+                beta: 0.2,
+                floor: 0.4,
+            },
+        );
+
+        let causal = config.params_for_edge_category(EdgeCategory::Causal);
+        let meta = config.params_for_edge_category(EdgeCategory::Meta);
+
+        // After 90 days, Meta with its slower beta + floor should retain
+        // much more than the default-configured Causal.
+        let causal_at_90 = decay_factor_with_params(90.0, &causal);
+        let meta_at_90 = decay_factor_with_params(90.0, &meta);
+        assert!(
+            meta_at_90 > causal_at_90 + 0.1,
+            "Meta should retain materially more than Causal after 90d: meta={meta_at_90}, causal={causal_at_90}"
+        );
+    }
+
+    #[test]
+    fn decay_config_json_roundtrip() {
+        let mut original = DecayConfig::default();
+        original.per_edge_category.insert(
+            EdgeCategory::Meta,
+            DecayParams {
+                crossover_days: 2.0,
+                lambda: 0.5,
+                beta: 0.3,
+                floor: 0.4,
+            },
+        );
+
+        let json = serde_json::to_string(&original).expect("encode");
+        let decoded = DecayConfig::from_json_str(&json).expect("decode");
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn decay_config_json_partial_override() {
+        // Real-world config files only specify what's overridden — the
+        // default block and absent categories must be filled in.
+        let json = r#"{
+            "per_edge_category": {
+                "Meta": {
+                    "crossover_days": 3.0,
+                    "lambda": 0.693,
+                    "beta": 0.2,
+                    "floor": 0.4
+                }
+            }
+        }"#;
+
+        let config = DecayConfig::from_json_str(json).expect("decode");
+        assert_eq!(config.default, DecayParams::upstream_default());
+        assert_eq!(config.per_edge_category.len(), 1);
+        assert_eq!(
+            config
+                .params_for_edge_category(EdgeCategory::Meta)
+                .floor,
+            0.4
+        );
     }
 }
