@@ -796,6 +796,8 @@ impl PyMemorySystem {
             max_results: limit,
             retrieval_mode,
             offset: 0,
+            node_types: None,
+            domain_tags: None,
         };
 
         let memories = self
@@ -1831,6 +1833,8 @@ impl PyMemorySystem {
             max_results: max_results * 2, // Get more for filtering
             retrieval_mode: RetrievalMode::Hybrid,
             offset: 0,
+            node_types: None,
+            domain_tags: None,
         };
 
         let memories = self

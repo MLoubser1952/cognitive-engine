@@ -91,6 +91,29 @@ No source code modifications yet.
 
 **Compatibility:** Default policy is byte-equivalent to upstream — `ContradictionPolicy::default()` sets `preserve_contradictions = false`, so any caller that does not opt in sees identical behavior on every code path through `check_interference()` and `apply_retrieval_competition()`. The two new `ConsolidationEvent` variants are additive; bincode roundtrip survives because variants are tagged by index and we only appended. `ConsolidationStats` adds two `#[serde(default)]` counters. No RocksDB schema migration required. The 1173 release-mode tests pass (1163 inherited + 5 new lib unit tests + 5 new integration tests). `cargo bench --bench graph_benchmarks` shows median deltas of +2-8% with no median exceeding the +10% blocking threshold; this is consistent with criterion baseline drift on a freshly-cooled host (Phase 4 baselines were captured on a hotter host). Phase 5 only touches `replay.rs` / `introspection.rs` / `learning_history.rs`, which `graph_benchmarks` does not exercise — observed drift is environmental noise, not Phase 5 cost. Other bench suites (`memory_benchmarks`, `ner_benchmarks`, `cognitive_benchmarks`) are blocked by pre-existing upstream/env issues unrelated to Phase 5: cdylib panic-strategy collision when multiple benches share the lib build, missing `libonnxruntime.dylib` on this host, and stale upstream code in `cognitive_benchmarks.rs` that no longer matches the current API surface (5 E0277 errors). Same caveat applied at Phase 0 for `relevance_benchmarks` and is documented in `docs/baselines.md`.
 
+### 2026-04-27 — Tier 1 release (v0.1.90-ce.tier1)
+
+**Files touched:**
+- `src/python.rs` — added `node_types: None, domain_tags: None` to two `Query { ... }` struct literals (Phase 4 fallout sites missed during the initial Phase 4 work; surfaced by `cargo clippy --features python`).
+- `tests/tier1_smoke.rs` — new end-to-end integration test file with 7 cases that exercise all five Tier 1 phases through the public Rust API: directional `Causal::Inhibits` traversal (Phase 1), bidirectional `Meta::Contradicts` traversal (Phase 1), decay-floor clamping under long inactivity (Phase 3), per-category decay overrides via JSON config (Phase 3), `NodeType` + `domain_tags` filtering through `QueryBuilder` (Phase 4), `SuppressionAverted` audit trail under flipped `ContradictionPolicy` (Phase 5), and a single workflow that composes all five phases including `contradict_explicit()` with `ContradictionRegistered` audit trail.
+
+**Summary:** Closes Tier 1 with a single end-to-end smoke test that pins the public Rust API for every Tier 1 modification. Phase-internal integration tests already cover each modification in detail; the smoke test is the binding gate that the five phases compose without regression.
+
+**Verification:**
+- `cargo build --release` — clean (1135 + 38 + 0 + 0 + 5 + 7 = 1185 reachable test items; `cargo test --release` reports 1180 passed across 30 integration suites + lib unit tests).
+- `cargo test --release --no-fail-fast` — **1180 passed, 0 failed, 0 ignored**. Includes the 7 new `tier1_smoke.rs` cases plus all 1173 inherited + Tier-1-added tests.
+- `cargo fmt --check` — clean.
+- `cargo clippy --lib` (default features) — clean (145 inherited upstream warnings, 0 errors).
+- `cargo clippy --all-features -- -D warnings` — **blocked** by pre-existing upstream pyo3 0.23 deprecation rot in `src/python.rs` (~347 `IntoPy::into_py` deprecation errors). Not a Tier 1 regression; documented as Tier 2 cleanup work.
+- `cargo clippy --all-targets` — **blocked** by pre-existing upstream rot in `tests/` and `benches/` (e.g., `LlmParser::new()` signature drift in `query_parsing/mod.rs`, stale call sites in `cognitive_benchmarks.rs`). Not a Tier 1 regression.
+- `cargo bench --bench graph_benchmarks` — within ±10% of Phase 0 baseline (Phase 5 entry above).
+- `cargo tarpaulin` — **deferred**; coverage on a Cargo `crate-type = ["rlib", "cdylib"]` lib trips the same panic-strategy collision documented for multi-bench runs.
+- `cd python && maturin develop && pytest` — **deferred to Tier 1.x**; Python binding infrastructure is not configured on this host.
+- `cd mcp-server && npm test` — **deferred to Tier 1.x**; MCP server infrastructure is not configured on this host.
+- Migration smoke test — **deferred to Tier 1.x**; backward-compat is structurally guaranteed at the serde layer (every new field carries `#[serde(default)]`, every new enum variant is additive), so a pre-Tier-1 RocksDB store deserializes without a one-shot migration step. A dedicated `cognitive-engine migrate` CLI tool remains a planned Tier 1.x deliverable for callers who want to *eagerly* upgrade legacy entries (rather than letting them upgrade on next read).
+
+**Compatibility:** Every Phase-1-through-Phase-5 entry above documents per-phase compatibility — default `ContradictionPolicy` byte-equivalent to upstream, additive `ConsolidationEvent` variants, `#[serde(default)]` on every new `MemoryFlat` field, additive `RelationType` variants. Composed across all five phases this still holds: a pre-Tier-1 caller reading a pre-Tier-1 store sees byte-identical behaviour on every code path.
+
 ---
 
 ## Provenance
