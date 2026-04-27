@@ -1954,6 +1954,9 @@ impl MemorySystem {
             time_range: query.time_range,
             experience_types: query.experience_types.clone(),
             importance_threshold: query.importance_threshold,
+            // Phase 4 (cognitive-engine): ontology filters carried through
+            node_types: query.node_types.clone(),
+            domain_tags: query.domain_tags.clone(),
             max_results: query.max_results,
             retrieval_mode: query.retrieval_mode.clone(),
             // Robotics filters (carry over from original query)

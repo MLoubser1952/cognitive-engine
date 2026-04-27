@@ -58,6 +58,82 @@ fn default_experience_type() -> ExperienceType {
 }
 
 // =============================================================================
+// Phase 4 (cognitive-engine): ontology tags
+//
+// Per project blueprint Section 5.1, every memory carries one of eight base
+// ontological types plus zero or more domain tags. NodeType is orthogonal to
+// ExperienceType: ExperienceType captures *how* the experience was captured
+// (Conversation, Decision, Error, …); NodeType captures *what the memory is*
+// in ontological terms (Entity, Event, Concept, …).
+//
+// `Legacy` is the deserialization fallback for memories that predate the
+// Phase 4 schema bump. The migration tool shipped at the end of Tier 1 will
+// reclassify Legacy nodes to a concrete type based on their ExperienceType
+// and content.
+// =============================================================================
+
+/// Eight base ontology types from project blueprint Section 5.1, plus a
+/// `Legacy` fallback for backward-compatible deserialization of pre-Phase-4
+/// stores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NodeType {
+    Entity,
+    Event,
+    Concept,
+    Pattern,
+    Heuristic,
+    Signal,
+    Forecast,
+    Context,
+    /// Pre-Phase-4 memories that have not yet been classified. Migration
+    /// tool reassigns these to a concrete variant.
+    Legacy,
+}
+
+impl Default for NodeType {
+    fn default() -> Self {
+        NodeType::Legacy
+    }
+}
+
+impl NodeType {
+    /// Suggest a NodeType for an existing ExperienceType. Used by the
+    /// migration tool and by callers that record memories without
+    /// supplying a node_type explicitly.
+    pub fn default_for_experience_type(et: &ExperienceType) -> Self {
+        match et {
+            ExperienceType::Conversation => NodeType::Event,
+            ExperienceType::Decision => NodeType::Event,
+            ExperienceType::Error => NodeType::Event,
+            ExperienceType::Learning => NodeType::Concept,
+            ExperienceType::Discovery => NodeType::Concept,
+            ExperienceType::Pattern => NodeType::Pattern,
+            ExperienceType::Context => NodeType::Context,
+            ExperienceType::Task => NodeType::Event,
+            ExperienceType::CodeEdit => NodeType::Event,
+            ExperienceType::FileAccess => NodeType::Event,
+            ExperienceType::Search => NodeType::Event,
+            ExperienceType::Command => NodeType::Event,
+            ExperienceType::Observation => NodeType::Signal,
+            ExperienceType::Intention => NodeType::Forecast,
+        }
+    }
+
+    /// Whether this NodeType is the deserialization-fallback variant.
+    /// Callers (e.g. migration tooling) use this to decide whether to
+    /// reclassify.
+    pub fn is_legacy(&self) -> bool {
+        matches!(self, NodeType::Legacy)
+    }
+}
+
+/// Serde default for the Memory::node_type field. Falls back to Legacy
+/// so existing RocksDB stores deserialize cleanly.
+fn default_node_type() -> NodeType {
+    NodeType::Legacy
+}
+
+// =============================================================================
 // MULTIMODAL SUPPORT - Images, Audio, Video embeddings
 // =============================================================================
 
@@ -1005,6 +1081,20 @@ pub struct Memory {
     /// Enables tree structures: parent -> children
     /// Example: "71-research" -> "algebraic relationships" -> "21 × 27 ≡ -1"
     pub parent_id: Option<MemoryId>,
+
+    // ==========================================================================
+    // PHASE 4 (cognitive-engine): ontology tags
+    // ==========================================================================
+    // (Memory has a custom Serialize/Deserialize impl via MemoryFlat;
+    // serde defaults for these fields live on MemoryFlat below.)
+    /// Ontology classification (one of eight base types per blueprint §5.1).
+    /// Defaults to `Legacy` for memories deserialized from pre-Phase-4 stores.
+    pub node_type: NodeType,
+
+    /// Multi-domain tag set (e.g. ["financial", "macro"], ["operations", "supply-chain"]).
+    /// Allows a single memory to be visible to multiple application-layer
+    /// domains. Empty by default; tagging is opt-in.
+    pub domain_tags: Vec<String>,
 }
 
 impl Clone for Memory {
@@ -1030,6 +1120,8 @@ impl Clone for Memory {
             history: self.history.clone(),
             related_todo_ids: self.related_todo_ids.clone(),
             parent_id: self.parent_id.clone(),
+            node_type: self.node_type,
+            domain_tags: self.domain_tags.clone(),
         }
     }
 }
@@ -1076,7 +1168,19 @@ impl Memory {
             related_todo_ids: Vec::new(),
             // Hierarchy - no parent by default (root memory)
             parent_id: None,
+            // Phase 4 (cognitive-engine): ontology defaults to Legacy + no domain tags.
+            // Callers wanting a typed memory should use `with_ontology` after construction.
+            node_type: NodeType::Legacy,
+            domain_tags: Vec::new(),
         }
+    }
+
+    /// Set ontology classification on a freshly-constructed memory.
+    /// Returns `self` for builder-style chaining.
+    pub fn with_ontology(mut self, node_type: NodeType, domain_tags: Vec<String>) -> Self {
+        self.node_type = node_type;
+        self.domain_tags = domain_tags;
+        self
     }
 
     /// Create a new memory linked to an external system (enables upsert)
@@ -1147,6 +1251,10 @@ impl Memory {
             related_todo_ids,
             // Legacy memories don't have hierarchy - default to root
             parent_id: None,
+            // Phase 4 (cognitive-engine): pre-Tier-1 stores get Legacy ontology
+            // until the migration tool reclassifies them.
+            node_type: NodeType::Legacy,
+            domain_tags: Vec::new(),
         }
     }
 
@@ -1589,6 +1697,12 @@ struct MemoryFlat {
     // Hierarchy
     #[serde(default)]
     parent_id: Option<MemoryId>,
+    // Phase 4 (cognitive-engine): ontology — appended for backward compat
+    // with pre-Phase-4 bincode-encoded payloads via #[serde(default)].
+    #[serde(default = "default_node_type")]
+    node_type: NodeType,
+    #[serde(default)]
+    domain_tags: Vec<String>,
 }
 
 impl Serialize for Memory {
@@ -1625,6 +1739,9 @@ impl Serialize for Memory {
             related_todo_ids: self.related_todo_ids.clone(),
             // Hierarchy
             parent_id: self.parent_id.clone(),
+            // Phase 4 (cognitive-engine): ontology
+            node_type: self.node_type,
+            domain_tags: self.domain_tags.clone(),
         };
         flat.serialize(serializer)
     }
@@ -1666,6 +1783,9 @@ impl<'de> Deserialize<'de> for Memory {
             related_todo_ids: flat.related_todo_ids,
             // Hierarchy
             parent_id: flat.parent_id,
+            // Phase 4 (cognitive-engine): ontology
+            node_type: flat.node_type,
+            domain_tags: flat.domain_tags,
         })
     }
 }
@@ -1936,6 +2056,15 @@ pub struct Query {
     pub experience_types: Option<Vec<ExperienceType>>,
     pub importance_threshold: Option<f32>,
 
+    // === Phase 4 (cognitive-engine): ontology filters ===
+    /// Restrict results to memories whose `node_type` is in this set.
+    /// `None` = no filter (default — all node types pass).
+    pub node_types: Option<Vec<NodeType>>,
+    /// Restrict results to memories carrying at least one of the
+    /// specified domain tags. `None` = no filter; `Some(vec![])` is
+    /// equivalent to `None` (treated as no filter).
+    pub domain_tags: Option<Vec<String>>,
+
     // === Robotics Filters ===
     /// Filter by robot/drone identifier
     pub robot_id: Option<String>,
@@ -2051,6 +2180,8 @@ impl Default for Query {
             time_range: None,
             experience_types: None,
             importance_threshold: None,
+            node_types: None,
+            domain_tags: None,
             robot_id: None,
             mission_id: None,
             geo_filter: None,
@@ -2121,6 +2252,21 @@ impl Query {
         if let Some((start, end)) = &self.time_range {
             if memory.created_at < *start || memory.created_at > *end {
                 return false;
+            }
+        }
+
+        // === Phase 4 (cognitive-engine): ontology filters ===
+        if let Some(types) = &self.node_types {
+            if !types.is_empty() && !types.contains(&memory.node_type) {
+                return false;
+            }
+        }
+        if let Some(tags) = &self.domain_tags {
+            if !tags.is_empty() {
+                let any_match = tags.iter().any(|t| memory.domain_tags.contains(t));
+                if !any_match {
+                    return false;
+                }
             }
         }
 
@@ -2277,6 +2423,19 @@ impl QueryBuilder {
 
     pub fn experience_types(mut self, types: Vec<ExperienceType>) -> Self {
         self.query.experience_types = Some(types);
+        self
+    }
+
+    /// Phase 4 (cognitive-engine): restrict to specific ontology node types.
+    pub fn node_types(mut self, types: Vec<NodeType>) -> Self {
+        self.query.node_types = Some(types);
+        self
+    }
+
+    /// Phase 4 (cognitive-engine): restrict to memories carrying any of
+    /// the given domain tags.
+    pub fn domain_tags(mut self, tags: Vec<String>) -> Self {
+        self.query.domain_tags = Some(tags);
         self
     }
 
@@ -4315,5 +4474,145 @@ mod tests {
         assert!(query.geo_filter.is_some());
         assert_eq!(query.action_type, Some("landing".to_string()));
         assert_eq!(query.reward_range, Some((0.5, 1.0)));
+    }
+
+    // =========================================================================
+    // Phase 4 (cognitive-engine): ontology tag tests
+    // =========================================================================
+
+    fn make_memory_with_ontology(node_type: NodeType, tags: Vec<&str>) -> Memory {
+        let exp = Experience {
+            experience_type: ExperienceType::Observation,
+            content: "test".to_string(),
+            ..Default::default()
+        };
+        Memory::new(MemoryId(Uuid::new_v4()), exp, 0.5, None, None, None, None)
+            .with_ontology(node_type, tags.into_iter().map(String::from).collect())
+    }
+
+    #[test]
+    fn nodetype_default_for_experience_type_is_total() {
+        // Every ExperienceType variant must map to a concrete NodeType (no
+        // panics, no Legacy). Migration relies on this being total.
+        let cases = [
+            (ExperienceType::Conversation, NodeType::Event),
+            (ExperienceType::Decision, NodeType::Event),
+            (ExperienceType::Error, NodeType::Event),
+            (ExperienceType::Learning, NodeType::Concept),
+            (ExperienceType::Discovery, NodeType::Concept),
+            (ExperienceType::Pattern, NodeType::Pattern),
+            (ExperienceType::Context, NodeType::Context),
+            (ExperienceType::Task, NodeType::Event),
+            (ExperienceType::CodeEdit, NodeType::Event),
+            (ExperienceType::FileAccess, NodeType::Event),
+            (ExperienceType::Search, NodeType::Event),
+            (ExperienceType::Command, NodeType::Event),
+            (ExperienceType::Observation, NodeType::Signal),
+            (ExperienceType::Intention, NodeType::Forecast),
+        ];
+        for (et, expected) in cases.iter() {
+            assert_eq!(NodeType::default_for_experience_type(et), *expected);
+        }
+    }
+
+    #[test]
+    fn memory_default_node_type_is_legacy() {
+        let m = make_memory_with_ontology(NodeType::Legacy, vec![]);
+        assert!(m.node_type.is_legacy());
+        assert!(m.domain_tags.is_empty());
+    }
+
+    #[test]
+    fn memory_with_ontology_sets_fields() {
+        let m = make_memory_with_ontology(
+            NodeType::Concept,
+            vec!["financial", "macro"],
+        );
+        assert_eq!(m.node_type, NodeType::Concept);
+        assert_eq!(m.domain_tags, vec!["financial", "macro"]);
+    }
+
+    #[test]
+    fn memory_clone_preserves_ontology() {
+        let m = make_memory_with_ontology(NodeType::Pattern, vec!["ops"]);
+        let cloned = m.clone();
+        assert_eq!(cloned.node_type, NodeType::Pattern);
+        assert_eq!(cloned.domain_tags, vec!["ops"]);
+    }
+
+    #[test]
+    fn memory_serde_roundtrip_preserves_ontology() {
+        let original = make_memory_with_ontology(
+            NodeType::Heuristic,
+            vec!["risk-management"],
+        );
+        let bytes = bincode::serde::encode_to_vec(&original, bincode::config::standard())
+            .expect("encode");
+        let (decoded, _): (Memory, _) = bincode::serde::decode_from_slice(
+            &bytes,
+            bincode::config::standard(),
+        )
+        .expect("decode");
+        assert_eq!(decoded.node_type, NodeType::Heuristic);
+        assert_eq!(decoded.domain_tags, vec!["risk-management"]);
+    }
+
+    #[test]
+    fn query_node_types_filter() {
+        let entity = make_memory_with_ontology(NodeType::Entity, vec![]);
+        let concept = make_memory_with_ontology(NodeType::Concept, vec![]);
+        let pattern = make_memory_with_ontology(NodeType::Pattern, vec![]);
+
+        let q = Query {
+            node_types: Some(vec![NodeType::Concept, NodeType::Pattern]),
+            ..Default::default()
+        };
+
+        assert!(!q.matches(&entity), "Entity should be filtered out");
+        assert!(q.matches(&concept), "Concept should pass");
+        assert!(q.matches(&pattern), "Pattern should pass");
+    }
+
+    #[test]
+    fn query_node_types_empty_vec_is_no_filter() {
+        let entity = make_memory_with_ontology(NodeType::Entity, vec![]);
+        let q = Query {
+            node_types: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(q.matches(&entity), "Empty filter list should pass everything");
+    }
+
+    #[test]
+    fn query_domain_tags_any_match() {
+        let m = make_memory_with_ontology(
+            NodeType::Concept,
+            vec!["financial", "macro"],
+        );
+        let q_match = Query {
+            domain_tags: Some(vec!["financial".to_string()]),
+            ..Default::default()
+        };
+        let q_match_either = Query {
+            domain_tags: Some(vec!["operations".to_string(), "macro".to_string()]),
+            ..Default::default()
+        };
+        let q_no_match = Query {
+            domain_tags: Some(vec!["aerospace".to_string()]),
+            ..Default::default()
+        };
+        assert!(q_match.matches(&m));
+        assert!(q_match_either.matches(&m));
+        assert!(!q_no_match.matches(&m));
+    }
+
+    #[test]
+    fn query_builder_node_types_and_domain_tags() {
+        let q = QueryBuilder::default()
+            .node_types(vec![NodeType::Forecast])
+            .domain_tags(vec!["macro".to_string()])
+            .build();
+        assert_eq!(q.node_types, Some(vec![NodeType::Forecast]));
+        assert_eq!(q.domain_tags, Some(vec!["macro".to_string()]));
     }
 }

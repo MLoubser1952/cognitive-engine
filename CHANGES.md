@@ -64,6 +64,19 @@ No source code modifications yet.
 
 **Compatibility:** Pure addition. Upstream `hybrid_decay_factor` and `tier_decay_factor` are untouched; new entry points are opt-in. No RocksDB schema change. JSON config files are optional — when absent, behaviour is identical to upstream.
 
+### 2026-04-27 — Phase 4: Ontology tags
+
+**Files touched:**
+- `src/memory/types.rs` — added `NodeType` enum (eight base variants `Entity` / `Event` / `Concept` / `Pattern` / `Heuristic` / `Signal` / `Forecast` / `Context` plus `Legacy` migration default), `default_for_experience_type()` mapping for the migration tool, `is_legacy()` predicate. Added `node_type: NodeType` and `domain_tags: Vec<String>` fields to `Memory`. Updated `MemoryFlat` (the bincode wire format) with `#[serde(default)]` on the new fields so pre-Phase-4 stores deserialize cleanly. Updated `impl Serialize`, `impl Deserialize`, `impl Clone`, `Memory::new`, and `Memory::from_legacy` to thread the new fields. Added `with_ontology(self, NodeType, Vec<String>) -> Self` builder. Added `node_types: Option<Vec<NodeType>>` and `domain_tags: Option<Vec<String>>` filter fields to `Query` plus matching filter logic in `Query::matches()`. Added `QueryBuilder::node_types()` and `QueryBuilder::domain_tags()` helpers. Added 8 unit tests covering the new types, defaults, serde roundtrip, and query filtering.
+- `src/memory/mod.rs` — propagated `node_types` and `domain_tags` through the inline `Query { ... }` construction in `vector_query` so semantic-search hits respect the ontology filter.
+- `tests/ontology_tags_tests.rs` — new integration test file with 3 cases that exercise the public API (`Memory::with_ontology`, `Query::matches`, `QueryBuilder` chaining, `default_for_experience_type` totality).
+
+**Summary:** Adds an ontology layer on top of upstream's `ExperienceType`. `ExperienceType` describes how a memory was *captured* (Conversation, Decision, CodeEdit, …); `NodeType` describes what it *is* ontologically (an Entity, an Event, a Concept, …). The two are orthogonal — a `Decision` experience usually maps to a `Concept` node, but the application layer is free to override. `domain_tags` is a free-form `Vec<String>` so a single node can belong to multiple application domains (`["financial", "macro"]`, `["operations", "fleet"]`, …) without bloating the type system. Filters on `Query` are AND-composed across fields and OR-composed within `domain_tags` (any match), matching the existing Query semantics.
+
+**Why:** Spec Section 5.1 calls out the eight base node types as the substrate Tier 2 needs for hypothesis tracking, audit trails, and pattern extraction. Without typed nodes, downstream code can't tell a `Concept` ("the Phillips curve flattens at high inflation") from a `Signal` ("CPI print 0.4% MoM") — they're both `ExperienceType::Learning`. Domain tags exist so the same engine can serve multiple application brains (Financial / CEO / Research / Operations) without each brain needing its own database.
+
+**Compatibility:** Pre-Phase-4 RocksDB stores deserialize because `MemoryFlat`'s new fields carry `#[serde(default)]` — old payloads decode with `node_type = Legacy` and `domain_tags = []`. Existing call sites that don't opt in are byte-equivalent on the read path. Bincode roundtrip is covered by the lib unit test `memory_serde_roundtrip_preserves_ontology`. The integration test deliberately *omits* a bincode roundtrip case because including one triggers a Cargo dep-resolution edge case caused by upstream's `crate-type = ["rlib", "cdylib"]` setting on the lib target — coverage is preserved at the lib-internal layer, where the rlib/cdylib distinction doesn't apply.
+
 ---
 
 ## Provenance

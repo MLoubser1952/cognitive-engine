@@ -152,3 +152,28 @@ Phase 3 (per-type decay with floors) is a pure addition — no upstream code pat
 | vector_search/25 | 2.44 ms | +2.8% (p=0.00) | within budget (<10%) |
 
 Conclusion: Phase 3 within budget. No Tier 1 perf change attributable to the decay code.
+
+## Phase 4 verification — 2026-04-27
+
+Phase 4 (ontology tags) added two fields to the `Memory` struct (`node_type: NodeType`, `domain_tags: Vec<String>`) and matching filter fields on `Query`. The on-disk encoding gained ~10–20 bytes per memory record. Test count grew from 1151 → 1163 (12 new tests, 0 failures, 7 ignored).
+
+First post-test bench run flagged six memory-path benches at +10–22% (cargo test had just finished a 6-min hot-CPU run). After a 2-minute cooldown and `--quick` re-bench, all but one fell back into budget. Same thermal-noise pattern as Phase 3 — re-confirming the "cool the host" rule.
+
+| Bench | Phase 4 median (cooled re-run) | criterion delta vs stored | criterion verdict |
+|---|---|---|---|
+| record_experience/100 | 2.21 µs | -4.3% (p=0.00) | improved |
+| retrieve_memories/10 | 2.32 ms | -7.6% (p=0.00) | improved |
+| vector_search/25 | 2.39 ms | -0.6% (p=0.35) | no change |
+| vector_search/50 | 2.29 ms | -3.2% (p=0.97) | no change |
+| memory_stats | 90.5 µs | -20.0% (p=0.00) | improved (was hot-baseline) |
+| ner_record_combined/record_no_ner | 3.76 µs | +4.1% (p=0.51) | no change |
+| ner_record_combined/ner_record_full | 2.67 µs | -17.1% (p=0.00) | improved |
+| end_to_end_ner_record_retrieve | 2.84 ms | +4.2% (p=0.17) | no change |
+| cache_retrieve/cold_no_cache | 27.7 ms | +5.5% (p=0.09) | within budget |
+| cache_retrieve/warm_cached | 27.8 ms | +5.4% (p=0.07) | within budget |
+| forget_operation | 224.5 ms | +4.3% (p=0.05) | within budget |
+| **ner_record_combined/ner_only** | **609 ns** | **+19.9% (p=0.01)** | **within Phase 0 static budget (≤631 ns)** |
+
+`ner_only` flagged a 19.9% regression vs criterion's stored Phase 3 sample, but Phase 4 changes nothing in NER code (NER doesn't touch `Memory`). The 609 ns value is still **below** the Phase 0 measured baseline + 10% budget (573 ns + 10% = 631 ns). The most plausible explanation is that Phase 3's stored ner_only sample was an unusually-fast capture (sub-µs benches swing ±15–20% run-to-run on Apple Silicon) and Phase 4 simply reverted to the Phase 0 mean. Treated as criterion baseline drift, not a Tier 1 regression. If `ner_only` continues to creep upward in Phase 5 we'll revisit.
+
+Conclusion: Phase 4 within budget. The slight write-path widening is expected from the larger Memory payload but stays sub-10%. No Tier 1 perf change attributable to the ontology fields beyond serialization overhead.
