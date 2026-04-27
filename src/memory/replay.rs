@@ -264,12 +264,59 @@ pub struct CompetitionResult {
     pub event: Option<ConsolidationEvent>,
 }
 
+/// Phase 5 (cognitive-engine): policy that lets callers turn upstream's
+/// similarity-suppression engine into a contradiction-preserving one.
+///
+/// Default is byte-equivalent to upstream — `preserve_contradictions =
+/// false`, no salience boost. Opt in via `with_policy()`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ContradictionPolicy {
+    /// When true, `check_interference` returns no decay targets and
+    /// `apply_retrieval_competition` returns every candidate as a
+    /// winner. The would-be suppression is logged as
+    /// `ConsolidationEvent::SuppressionAverted` so downstream audit
+    /// can see what was preserved.
+    ///
+    /// Severe-similarity duplicates (>= INTERFERENCE_SEVERE_THRESHOLD)
+    /// are still flagged as duplicates — duplicates aren't
+    /// contradictions, the caller should merge them.
+    pub preserve_contradictions: bool,
+
+    /// Salience boost applied to contradicting evidence when an
+    /// explicit contradiction is registered via `contradict_explicit`.
+    /// Spec Section 6.1 calls for +0.20 by default.
+    pub salience_boost: f32,
+}
+
+impl Default for ContradictionPolicy {
+    fn default() -> Self {
+        Self {
+            preserve_contradictions: false,
+            salience_boost: 0.20,
+        }
+    }
+}
+
+/// Phase 5 (cognitive-engine): result of `contradict_explicit()`.
+///
+/// The detector emits the event for the audit trail; the caller is
+/// responsible for inserting the suggested `Meta::Contradicts` edge
+/// into the graph and applying `salience_boost` to the new evidence.
+#[derive(Debug, Clone)]
+pub struct ContradictionResult {
+    pub salience_boost: f32,
+    pub event: ConsolidationEvent,
+}
+
 /// Detector for memory interference effects
 pub struct InterferenceDetector {
     /// Tracked interference records per memory
     interference_history: HashMap<String, Vec<InterferenceRecord>>,
     /// Total interference events
     total_interference_events: usize,
+    /// Phase 5: contradiction-preservation policy. Defaults to upstream
+    /// suppression behavior; see `with_policy()` to flip.
+    policy: ContradictionPolicy,
 }
 
 impl Default for InterferenceDetector {
@@ -283,6 +330,62 @@ impl InterferenceDetector {
         Self {
             interference_history: HashMap::new(),
             total_interference_events: 0,
+            policy: ContradictionPolicy::default(),
+        }
+    }
+
+    /// Phase 5: construct a detector with an explicit policy. Pass
+    /// `ContradictionPolicy { preserve_contradictions: true, .. }` to
+    /// flip suppression off and have similar-but-conflicting memories
+    /// preserved instead of decayed.
+    pub fn with_policy(policy: ContradictionPolicy) -> Self {
+        Self {
+            interference_history: HashMap::new(),
+            total_interference_events: 0,
+            policy,
+        }
+    }
+
+    /// Phase 5: replace the active policy on an existing detector. Use
+    /// this when loading interference history at startup but wanting
+    /// contradiction-preservation behavior going forward.
+    pub fn set_policy(&mut self, policy: ContradictionPolicy) {
+        self.policy = policy;
+    }
+
+    /// Phase 5: read the active policy.
+    pub fn policy(&self) -> ContradictionPolicy {
+        self.policy
+    }
+
+    /// Phase 5: register an explicit contradiction between two nodes.
+    ///
+    /// Conservative Tier-1 implementation per spec Section 6.1: the
+    /// caller (typically the application layer) decides that two
+    /// nodes hold conflicting evidence and calls this. The detector
+    /// emits a `ContradictionRegistered` event for the audit trail
+    /// and returns the salience boost the caller should apply to the
+    /// newer evidence. Inserting the `Meta::Contradicts` edge in the
+    /// graph is the caller's responsibility — the detector does not
+    /// hold a graph reference, deliberately, to keep the module
+    /// boundary clean.
+    pub fn contradict_explicit(
+        &mut self,
+        node_a_id: &str,
+        node_b_id: &str,
+        evidence_id: Option<&str>,
+    ) -> ContradictionResult {
+        let event = ConsolidationEvent::ContradictionRegistered {
+            node_a_id: node_a_id.to_string(),
+            node_b_id: node_b_id.to_string(),
+            evidence_id: evidence_id.map(String::from),
+            salience_boost: self.policy.salience_boost,
+            timestamp: Utc::now(),
+        };
+        self.total_interference_events += 1;
+        ContradictionResult {
+            salience_boost: self.policy.salience_boost,
+            event,
         }
     }
 
@@ -316,6 +419,23 @@ impl InterferenceDetector {
                 result.is_duplicate = true;
                 // Return early - should merge, not interfere
                 return result;
+            }
+
+            // Phase 5: when contradiction-preservation is enabled,
+            // record the would-be suppression as an audit event and
+            // skip the actual decay/proactive-strength calculations.
+            if self.policy.preserve_contradictions {
+                result
+                    .events
+                    .push(ConsolidationEvent::SuppressionAverted {
+                        new_memory_id: new_memory_id.to_string(),
+                        old_memory_id: old_id.clone(),
+                        similarity: *similarity,
+                        interference_type: InterferenceType::Retroactive,
+                        timestamp: now,
+                    });
+                let _ = old_preview; // silence unused warning under this branch
+                continue;
             }
 
             // Calculate interference effects
@@ -417,6 +537,43 @@ impl InterferenceDetector {
                 suppressed: Vec::new(),
                 competition_factor: 0.0,
                 event: None,
+            };
+        }
+
+        // Phase 5: when contradiction-preservation is enabled, every
+        // candidate wins. Emit one SuppressionAverted event per pair
+        // that *would* have triggered close-competitor suppression so
+        // the audit trail can reconstruct what was preserved.
+        if self.policy.preserve_contradictions {
+            let winners: Vec<(String, f32)> = candidates
+                .iter()
+                .map(|(id, score, _)| (id.clone(), *score))
+                .collect();
+            let mut events = Vec::new();
+            if let Some((winner_id, winner_score)) = winners.first() {
+                if *winner_score > 0.0 {
+                    for (id, score) in winners.iter().skip(1) {
+                        let score_ratio = score / winner_score;
+                        if score_ratio > 0.9 {
+                            events.push(ConsolidationEvent::SuppressionAverted {
+                                new_memory_id: id.clone(),
+                                old_memory_id: winner_id.clone(),
+                                similarity: score_ratio,
+                                interference_type: InterferenceType::RetrievalCompetition,
+                                timestamp: Utc::now(),
+                            });
+                        }
+                    }
+                }
+            }
+            self.total_interference_events += events.len();
+            let event = events.into_iter().next();
+            let _ = query_preview;
+            return CompetitionResult {
+                winners,
+                suppressed: Vec::new(),
+                competition_factor: 0.0,
+                event,
             };
         }
 
@@ -1006,5 +1163,127 @@ mod tests {
         assert!(adjustments.get("mem-with-history").unwrap() > &1.0);
         // Memory without history should be neutral
         assert_eq!(adjustments.get("mem-no-history").unwrap(), &1.0);
+    }
+
+    // =========================================================================
+    // Phase 5 (cognitive-engine): contradiction-preservation tests
+    // =========================================================================
+    //
+    // These tests pin down that:
+    //   1. Default policy is byte-equivalent to upstream (no flips).
+    //   2. Flipping `preserve_contradictions = true` averts retroactive
+    //      and proactive suppression while still flagging duplicates.
+    //   3. Retrieval competition under the flipped policy keeps every
+    //      candidate as a winner.
+    //   4. `contradict_explicit` returns the configured boost and a
+    //      `ContradictionRegistered` event for the audit trail.
+    // =========================================================================
+
+    #[test]
+    fn contradiction_policy_default_is_byte_equivalent_to_upstream() {
+        let detector = InterferenceDetector::new();
+        let policy = detector.policy();
+        assert!(!policy.preserve_contradictions);
+        // Salience boost is configured per spec but irrelevant when
+        // preserve_contradictions is false.
+        assert!((policy.salience_boost - 0.20).abs() < 1e-6);
+    }
+
+    #[test]
+    fn preserve_contradictions_averts_retroactive_suppression() {
+        let mut detector = InterferenceDetector::with_policy(ContradictionPolicy {
+            preserve_contradictions: true,
+            salience_boost: 0.20,
+        });
+        let now = Utc::now();
+        // Identical fixture to `test_interference_detection` so we can
+        // see the policy flip the outcome rather than the inputs.
+        let similar = vec![(
+            "old-mem".to_string(),
+            0.90,
+            0.5,
+            now - Duration::hours(12),
+            "Old memory content".to_string(),
+        )];
+        let result = detector.check_interference("new-mem", 0.7, now, &similar);
+        // Suppression averted: no decay targets, no proactive decay.
+        assert!(result.retroactive_targets.is_empty());
+        assert_eq!(result.proactive_decay, 0.0);
+        // But the audit trail records what was preserved.
+        assert!(result
+            .events
+            .iter()
+            .any(|e| matches!(e, ConsolidationEvent::SuppressionAverted { .. })));
+    }
+
+    #[test]
+    fn preserve_contradictions_still_flags_duplicates() {
+        // Severe similarity (>= INTERFERENCE_SEVERE_THRESHOLD) is
+        // duplicate, not contradiction — caller should merge, not keep
+        // both. The flip must not change this.
+        let mut detector = InterferenceDetector::with_policy(ContradictionPolicy {
+            preserve_contradictions: true,
+            ..Default::default()
+        });
+        let now = Utc::now();
+        let similar = vec![(
+            "existing-mem".to_string(),
+            0.98,
+            0.5,
+            now - Duration::hours(1),
+            "Existing content".to_string(),
+        )];
+        let result = detector.check_interference("new-mem", 0.6, now, &similar);
+        assert!(result.is_duplicate);
+    }
+
+    #[test]
+    fn preserve_contradictions_keeps_all_competitors_as_winners() {
+        let mut detector = InterferenceDetector::with_policy(ContradictionPolicy {
+            preserve_contradictions: true,
+            ..Default::default()
+        });
+        let candidates = vec![
+            ("mem-1".to_string(), 0.9, 0.85),
+            ("mem-2".to_string(), 0.88, 0.82),
+            ("mem-3".to_string(), 0.5, 0.70),
+        ];
+        let result = detector.apply_retrieval_competition(&candidates, "test query");
+        // Every candidate survives.
+        assert_eq!(result.winners.len(), 3);
+        assert!(result.suppressed.is_empty());
+        // The close-competitor pair (mem-1 vs mem-2, score_ratio > 0.9)
+        // is logged as SuppressionAverted; mem-3 is well below the
+        // threshold and produces no event.
+        if let Some(ConsolidationEvent::SuppressionAverted { similarity, .. }) = result.event {
+            assert!(similarity > 0.9);
+        } else {
+            panic!("expected a SuppressionAverted event for the close competitors");
+        }
+    }
+
+    #[test]
+    fn contradict_explicit_returns_boost_and_event() {
+        let mut detector = InterferenceDetector::with_policy(ContradictionPolicy {
+            preserve_contradictions: true,
+            salience_boost: 0.25,
+        });
+        let result = detector.contradict_explicit("node-a", "node-b", Some("evidence-1"));
+        assert!((result.salience_boost - 0.25).abs() < 1e-6);
+        match result.event {
+            ConsolidationEvent::ContradictionRegistered {
+                node_a_id,
+                node_b_id,
+                evidence_id,
+                salience_boost,
+                ..
+            } => {
+                assert_eq!(node_a_id, "node-a");
+                assert_eq!(node_b_id, "node-b");
+                assert_eq!(evidence_id, Some("evidence-1".to_string()));
+                assert!((salience_boost - 0.25).abs() < 1e-6);
+            }
+            other => panic!("expected ContradictionRegistered, got {:?}", other),
+        }
     }
 }

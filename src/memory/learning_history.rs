@@ -346,6 +346,29 @@ impl LearningHistoryStore {
                 None,
                 None,
             ),
+            // Phase 5 (cognitive-engine): contradiction-preservation
+            // events. Indexed under the memory pair so audit queries
+            // can surface "where did we choose to keep both?"
+            ConsolidationEvent::SuppressionAverted {
+                new_memory_id,
+                old_memory_id,
+                ..
+            } => (
+                LearningEventType::InterferenceDetected,
+                Some(new_memory_id.clone()),
+                Some(old_memory_id.clone()),
+                None,
+            ),
+            ConsolidationEvent::ContradictionRegistered {
+                node_a_id,
+                node_b_id,
+                ..
+            } => (
+                LearningEventType::InterferenceDetected,
+                Some(node_a_id.clone()),
+                Some(node_b_id.clone()),
+                None,
+            ),
         }
     }
 

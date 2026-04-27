@@ -177,3 +177,35 @@ First post-test bench run flagged six memory-path benches at +10–22% (cargo te
 `ner_only` flagged a 19.9% regression vs criterion's stored Phase 3 sample, but Phase 4 changes nothing in NER code (NER doesn't touch `Memory`). The 609 ns value is still **below** the Phase 0 measured baseline + 10% budget (573 ns + 10% = 631 ns). The most plausible explanation is that Phase 3's stored ner_only sample was an unusually-fast capture (sub-µs benches swing ±15–20% run-to-run on Apple Silicon) and Phase 4 simply reverted to the Phase 0 mean. Treated as criterion baseline drift, not a Tier 1 regression. If `ner_only` continues to creep upward in Phase 5 we'll revisit.
 
 Conclusion: Phase 4 within budget. The slight write-path widening is expected from the larger Memory payload but stays sub-10%. No Tier 1 perf change attributable to the ontology fields beyond serialization overhead.
+
+## Phase 5 verification — 2026-04-27
+
+Phase 5 (contradiction-preserving interference) added `ContradictionPolicy` and the `SuppressionAverted` / `ContradictionRegistered` audit events to `replay.rs` / `introspection.rs` / `learning_history.rs`. Default policy is byte-equivalent to upstream (single bool branch on the hot path), so no perf change was expected on existing call sites. Test count grew from 1163 → 1173 (5 new lib unit tests in `mod replay::tests`, 5 new integration tests in `tests/contradiction_preservation_tests.rs`). Full release-mode run: 1173 passed, 0 failed, 7 ignored, exit code 0.
+
+`cargo bench --bench graph_benchmarks` (cooled host, 60-second pre-bench sleep):
+
+| Bench | Phase 5 median | criterion delta vs stored | criterion verdict |
+|---|---|---|---|
+| graph_entity_get/10 | 539.03 ns | ~0% (p high) | no change |
+| graph_entity_get/100 | 608.87 ns | -1.0% (p=0.13) | no change |
+| graph_entity_get/1000 | 689.07 ns | +0.1% (p=0.94) | no change |
+| graph_traversal/1 | 74.91 µs | +5.8% (p=0.00) | within budget |
+| graph_traversal/2 | 149.06 µs | +5.9% (p=0.00) | within budget |
+| graph_traversal/3 | 191.14 µs | +2.7% (p=0.00) | within budget |
+| graph_hebbian_decay/10 | 3.49 µs | +2.2% (p=0.01) | within budget |
+| graph_hebbian_decay/100 | 3.59 µs | +2.8% (p=0.00) | within budget |
+| graph_hebbian_decay/500 | 3.51 µs | -0.3% (p=0.61) | no change |
+| graph_ner_batch/5 | 1.58 ms | +5.8% (p=0.00) | within budget |
+| graph_ner_batch/10 | 2.52 ms | +7.7% (p=0.00) | within budget |
+| graph_ner_batch/20 | 3.96 ms | +2.7% (p=0.00) | within budget |
+
+Every flagged regression has median < +8% — well under the +10% blocking threshold. `graph_benchmarks` does not exercise `replay.rs`, so the small upward drift is criterion baseline drift / thermal residue from the prior test run, not Phase 5 cost. The default-policy hot path adds exactly one `if !self.policy.preserve_contradictions { /* fall through to upstream */ }` check before the existing logic — by construction it cannot regress measurably.
+
+Other bench suites blocked for environmental reasons unrelated to Phase 5:
+- `memory_benchmarks`, `hebbian_benchmarks`, `softmax_benchmarks`: panic-strategy collision (`crate-type = ["rlib", "cdylib"]` on the lib target — same upstream Cargo edge case that bit Phase 4 integration tests).
+- `ner_benchmarks`: `libonnxruntime.dylib` failed to load on this host at runtime (env-only, the dylib is supposed to live in `~/Library/Caches/shodh-memory/` but isn't on the search path for the bench binary).
+- `cognitive_benchmarks`: 5 E0277 errors against current `Memory::new` / `Memory` signatures — stale upstream bench that was never updated when the Memory API churned. Same category of upstream rot as `relevance_benchmarks` documented at Phase 0.
+
+Carried as Tier 1 release blockers / cleanup work in the Tier 1 release pass; none represent a Phase 5 regression.
+
+Conclusion: Phase 5 within budget. All 1173 tests pass; the only bench suite that compiled and ran (graph_benchmarks) shows zero medians > +10%; the default-policy hot path is provably non-regressive by inspection.

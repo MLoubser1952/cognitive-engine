@@ -186,6 +186,32 @@ pub enum ConsolidationEvent {
         timestamp: DateTime<Utc>,
     },
 
+    // Phase 5 (cognitive-engine): contradiction-preservation events.
+    // Emitted when an opt-in ContradictionPolicy turns upstream
+    // similarity-suppression into a no-op so that conflicting evidence
+    // is preserved instead of weakened.
+    /// Suppression that would have fired under upstream interference
+    /// rules was deliberately averted by the contradiction policy.
+    SuppressionAverted {
+        new_memory_id: String,
+        old_memory_id: String,
+        similarity: f32,
+        interference_type: InterferenceType,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// An explicit contradiction was registered between two nodes via
+    /// the `contradict_explicit()` API. The caller is expected to
+    /// insert a corresponding `Meta::Contradicts` edge in the graph
+    /// and apply the returned salience boost.
+    ContradictionRegistered {
+        node_a_id: String,
+        node_b_id: String,
+        evidence_id: Option<String>,
+        salience_boost: f32,
+        timestamp: DateTime<Utc>,
+    },
+
     // PIPE-2: Pattern-Triggered Replay Events
     // Based on hippocampal sharp-wave ripple research (Rasch & Born 2013)
     /// Pattern-triggered replay initiated (not timer-based)
@@ -484,6 +510,11 @@ pub struct ConsolidationStats {
     pub interference_events: usize,
     pub memories_weakened: usize,
     pub retrieval_competitions: usize,
+    // Phase 5 (cognitive-engine): contradiction-preservation statistics
+    #[serde(default)]
+    pub suppressions_averted: usize,
+    #[serde(default)]
+    pub contradictions_registered: usize,
 }
 
 /// Buffer for storing consolidation events
@@ -898,6 +929,16 @@ impl ConsolidationEventBuffer {
                 ConsolidationEvent::GraphOrphanDetected { .. } => {}
                 ConsolidationEvent::GraphAdjustedPromotion { .. } => {}
                 ConsolidationEvent::GraphDecayConsolidated { .. } => {}
+
+                // Phase 5 (cognitive-engine): contradiction-preservation
+                // events. Logged for introspection; counters are added
+                // to ConsolidationStats below.
+                ConsolidationEvent::SuppressionAverted { .. } => {
+                    report.statistics.suppressions_averted += 1;
+                }
+                ConsolidationEvent::ContradictionRegistered { .. } => {
+                    report.statistics.contradictions_registered += 1;
+                }
             }
         }
 
@@ -1232,6 +1273,16 @@ impl ConsolidationEventBuffer {
                 ConsolidationEvent::GraphOrphanDetected { .. } => {}
                 ConsolidationEvent::GraphAdjustedPromotion { .. } => {}
                 ConsolidationEvent::GraphDecayConsolidated { .. } => {}
+
+                // Phase 5 (cognitive-engine): contradiction-preservation
+                // events. Logged for introspection; counters are added
+                // to ConsolidationStats below.
+                ConsolidationEvent::SuppressionAverted { .. } => {
+                    report.statistics.suppressions_averted += 1;
+                }
+                ConsolidationEvent::ContradictionRegistered { .. } => {
+                    report.statistics.contradictions_registered += 1;
+                }
             }
         }
 
@@ -1275,6 +1326,9 @@ impl ConsolidationEvent {
             ConsolidationEvent::GraphOrphanDetected { timestamp, .. } => *timestamp,
             ConsolidationEvent::GraphAdjustedPromotion { timestamp, .. } => *timestamp,
             ConsolidationEvent::GraphDecayConsolidated { timestamp, .. } => *timestamp,
+            // Phase 5: contradiction-preservation events
+            ConsolidationEvent::SuppressionAverted { timestamp, .. } => *timestamp,
+            ConsolidationEvent::ContradictionRegistered { timestamp, .. } => *timestamp,
         }
     }
 
