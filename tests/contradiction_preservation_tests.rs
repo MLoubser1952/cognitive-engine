@@ -67,7 +67,11 @@ fn flipped_policy_preserves_contradicting_evidence_at_write_time() {
             old_memory_id,
             interference_type,
             ..
-        } => Some((new_memory_id.clone(), old_memory_id.clone(), interference_type.clone())),
+        } => Some((
+            new_memory_id.clone(),
+            old_memory_id.clone(),
+            interference_type.clone(),
+        )),
         _ => None,
     });
     let (new_id, old_id, kind) = averted.expect("expected SuppressionAverted event");

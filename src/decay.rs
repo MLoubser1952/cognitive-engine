@@ -363,8 +363,12 @@ impl DecayConfig {
 /// applied as a `max` clamp at the very end.
 #[inline]
 pub fn decay_factor_with_params(days_elapsed: f64, params: &DecayParams) -> f32 {
-    let raw =
-        hybrid_decay_factor_custom(days_elapsed, params.crossover_days, params.lambda, params.beta);
+    let raw = hybrid_decay_factor_custom(
+        days_elapsed,
+        params.crossover_days,
+        params.lambda,
+        params.beta,
+    );
     raw.max(params.floor)
 }
 
@@ -631,9 +635,7 @@ mod tests {
         assert_eq!(config.default, DecayParams::upstream_default());
         assert_eq!(config.per_edge_category.len(), 1);
         assert_eq!(
-            config
-                .params_for_edge_category(EdgeCategory::Meta)
-                .floor,
+            config.params_for_edge_category(EdgeCategory::Meta).floor,
             0.4
         );
     }

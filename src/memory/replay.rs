@@ -425,15 +425,13 @@ impl InterferenceDetector {
             // record the would-be suppression as an audit event and
             // skip the actual decay/proactive-strength calculations.
             if self.policy.preserve_contradictions {
-                result
-                    .events
-                    .push(ConsolidationEvent::SuppressionAverted {
-                        new_memory_id: new_memory_id.to_string(),
-                        old_memory_id: old_id.clone(),
-                        similarity: *similarity,
-                        interference_type: InterferenceType::Retroactive,
-                        timestamp: now,
-                    });
+                result.events.push(ConsolidationEvent::SuppressionAverted {
+                    new_memory_id: new_memory_id.to_string(),
+                    old_memory_id: old_id.clone(),
+                    similarity: *similarity,
+                    interference_type: InterferenceType::Retroactive,
+                    timestamp: now,
+                });
                 let _ = old_preview; // silence unused warning under this branch
                 continue;
             }

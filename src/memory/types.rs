@@ -4524,10 +4524,7 @@ mod tests {
 
     #[test]
     fn memory_with_ontology_sets_fields() {
-        let m = make_memory_with_ontology(
-            NodeType::Concept,
-            vec!["financial", "macro"],
-        );
+        let m = make_memory_with_ontology(NodeType::Concept, vec!["financial", "macro"]);
         assert_eq!(m.node_type, NodeType::Concept);
         assert_eq!(m.domain_tags, vec!["financial", "macro"]);
     }
@@ -4542,17 +4539,11 @@ mod tests {
 
     #[test]
     fn memory_serde_roundtrip_preserves_ontology() {
-        let original = make_memory_with_ontology(
-            NodeType::Heuristic,
-            vec!["risk-management"],
-        );
-        let bytes = bincode::serde::encode_to_vec(&original, bincode::config::standard())
-            .expect("encode");
-        let (decoded, _): (Memory, _) = bincode::serde::decode_from_slice(
-            &bytes,
-            bincode::config::standard(),
-        )
-        .expect("decode");
+        let original = make_memory_with_ontology(NodeType::Heuristic, vec!["risk-management"]);
+        let bytes =
+            bincode::serde::encode_to_vec(&original, bincode::config::standard()).expect("encode");
+        let (decoded, _): (Memory, _) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).expect("decode");
         assert_eq!(decoded.node_type, NodeType::Heuristic);
         assert_eq!(decoded.domain_tags, vec!["risk-management"]);
     }
@@ -4580,15 +4571,15 @@ mod tests {
             node_types: Some(vec![]),
             ..Default::default()
         };
-        assert!(q.matches(&entity), "Empty filter list should pass everything");
+        assert!(
+            q.matches(&entity),
+            "Empty filter list should pass everything"
+        );
     }
 
     #[test]
     fn query_domain_tags_any_match() {
-        let m = make_memory_with_ontology(
-            NodeType::Concept,
-            vec!["financial", "macro"],
-        );
+        let m = make_memory_with_ontology(NodeType::Concept, vec!["financial", "macro"]);
         let q_match = Query {
             domain_tags: Some(vec!["financial".to_string()]),
             ..Default::default()

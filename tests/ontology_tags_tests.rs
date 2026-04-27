@@ -44,11 +44,36 @@ fn legacy_memory_defaults_to_legacy_node_type() {
 #[test]
 fn query_filters_by_node_type_and_domain_tag_combined() {
     let memories = vec![
-        make("a", ExperienceType::Learning, NodeType::Concept, vec!["financial"]),
-        make("b", ExperienceType::Learning, NodeType::Concept, vec!["operations"]),
-        make("c", ExperienceType::Discovery, NodeType::Concept, vec!["financial"]),
-        make("d", ExperienceType::Pattern, NodeType::Pattern, vec!["financial"]),
-        make("e", ExperienceType::Observation, NodeType::Entity, vec!["financial"]),
+        make(
+            "a",
+            ExperienceType::Learning,
+            NodeType::Concept,
+            vec!["financial"],
+        ),
+        make(
+            "b",
+            ExperienceType::Learning,
+            NodeType::Concept,
+            vec!["operations"],
+        ),
+        make(
+            "c",
+            ExperienceType::Discovery,
+            NodeType::Concept,
+            vec!["financial"],
+        ),
+        make(
+            "d",
+            ExperienceType::Pattern,
+            NodeType::Pattern,
+            vec!["financial"],
+        ),
+        make(
+            "e",
+            ExperienceType::Observation,
+            NodeType::Entity,
+            vec!["financial"],
+        ),
     ];
 
     // Concept ∩ financial: a + c only.
@@ -59,7 +84,11 @@ fn query_filters_by_node_type_and_domain_tag_combined() {
 
     let pass: Vec<&Memory> = memories.iter().filter(|m| q.matches(m)).collect();
     let pass_contents: Vec<&str> = pass.iter().map(|m| m.experience.content.as_str()).collect();
-    assert_eq!(pass_contents.len(), 2, "expected 2 hits, got {pass_contents:?}");
+    assert_eq!(
+        pass_contents.len(),
+        2,
+        "expected 2 hits, got {pass_contents:?}"
+    );
     assert!(pass_contents.contains(&"a"));
     assert!(pass_contents.contains(&"c"));
 }
@@ -87,10 +116,6 @@ fn nodetype_default_for_experience_type_is_total() {
     for et in variants.iter() {
         // Every variant must map to a non-Legacy NodeType.
         let suggested = NodeType::default_for_experience_type(et);
-        assert!(
-            !suggested.is_legacy(),
-            "{:?} should not map to Legacy",
-            et
-        );
+        assert!(!suggested.is_legacy(), "{:?} should not map to Legacy", et);
     }
 }

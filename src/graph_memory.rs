@@ -975,18 +975,15 @@ impl RelationType {
             | Self::CreatedBy
             | Self::DevelopedBy => EdgeCategory::Structural,
 
-            Self::Causes
-            | Self::ResultsIn
-            | Self::Inhibits
-            | Self::Enables
-            | Self::Amplifies => EdgeCategory::Causal,
+            Self::Causes | Self::ResultsIn | Self::Inhibits | Self::Enables | Self::Amplifies => {
+                EdgeCategory::Causal
+            }
 
             Self::Preceded | Self::Triggered | Self::CoincidedWith => EdgeCategory::Temporal,
 
-            Self::Contradicts
-            | Self::Supports
-            | Self::IsInstanceOf
-            | Self::GeneralisesTo => EdgeCategory::Meta,
+            Self::Contradicts | Self::Supports | Self::IsInstanceOf | Self::GeneralisesTo => {
+                EdgeCategory::Meta
+            }
 
             Self::CoRetrieved | Self::CoOccurs => EdgeCategory::Hebbian,
 
@@ -2402,10 +2399,7 @@ impl GraphMemory {
     /// This is the standard helper for "give me everything the caller would
     /// reasonably expect to see when asking for this node's neighbours" —
     /// directional relations are honoured, symmetric ones flow either way.
-    pub fn outgoing_with_bidirectional(
-        &self,
-        entity_uuid: &Uuid,
-    ) -> Result<Vec<RelationshipEdge>> {
+    pub fn outgoing_with_bidirectional(&self, entity_uuid: &Uuid) -> Result<Vec<RelationshipEdge>> {
         let edges = self.get_entity_relationships(entity_uuid)?;
         Ok(edges
             .into_iter()
