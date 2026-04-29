@@ -44,21 +44,20 @@ pub enum ParserType {
 pub struct ParserConfig {
     /// Which parser implementation to use
     pub parser_type: ParserType,
-    /// Path to LLM model (only used if parser_type is Llm)
-    pub llm_model_path: Option<String>,
-    /// Number of threads for LLM inference
-    pub llm_threads: usize,
-    /// Context size for LLM
-    pub llm_context_size: usize,
+    /// HTTP endpoint for the LLM server (Ollama / LM Studio / vLLM).
+    /// Only used when `parser_type == Llm`.
+    pub llm_endpoint: Option<String>,
+    /// Model name to request from the LLM server (e.g. "qwen2.5:1.5b").
+    /// Only used when `parser_type == Llm`.
+    pub llm_model: Option<String>,
 }
 
 impl Default for ParserConfig {
     fn default() -> Self {
         Self {
             parser_type: ParserType::RuleBased,
-            llm_model_path: None,
-            llm_threads: 4,
-            llm_context_size: 2048,
+            llm_endpoint: None,
+            llm_model: None,
         }
     }
 }
@@ -69,12 +68,12 @@ impl ParserConfig {
         Self::default()
     }
 
-    /// Create config for LLM parser
-    pub fn llm(model_path: impl Into<String>) -> Self {
+    /// Create config for LLM parser pointing at an HTTP-served model.
+    pub fn llm(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             parser_type: ParserType::Llm,
-            llm_model_path: Some(model_path.into()),
-            ..Default::default()
+            llm_endpoint: Some(endpoint.into()),
+            llm_model: Some(model.into()),
         }
     }
 }
@@ -85,13 +84,13 @@ pub fn create_parser(config: ParserConfig) -> Arc<dyn QueryParser> {
         ParserType::RuleBased => Arc::new(RuleBasedParser::new()),
         #[cfg(feature = "llm-parser")]
         ParserType::Llm => {
-            let model_path = config
-                .llm_model_path
-                .expect("LLM model path required for LLM parser");
-            Arc::new(
-                LlmParser::new(&model_path, config.llm_threads, config.llm_context_size)
-                    .expect("Failed to load LLM model"),
-            )
+            let endpoint = config
+                .llm_endpoint
+                .expect("LLM endpoint required for LLM parser");
+            let model = config
+                .llm_model
+                .expect("LLM model name required for LLM parser");
+            Arc::new(LlmParser::new(&endpoint, &model))
         }
         #[cfg(not(feature = "llm-parser"))]
         ParserType::Llm => {

@@ -91,6 +91,25 @@ No source code modifications yet.
 
 **Compatibility:** Default policy is byte-equivalent to upstream — `ContradictionPolicy::default()` sets `preserve_contradictions = false`, so any caller that does not opt in sees identical behavior on every code path through `check_interference()` and `apply_retrieval_competition()`. The two new `ConsolidationEvent` variants are additive; bincode roundtrip survives because variants are tagged by index and we only appended. `ConsolidationStats` adds two `#[serde(default)]` counters. No RocksDB schema migration required. The 1173 release-mode tests pass (1163 inherited + 5 new lib unit tests + 5 new integration tests). `cargo bench --bench graph_benchmarks` shows median deltas of +2-8% with no median exceeding the +10% blocking threshold; this is consistent with criterion baseline drift on a freshly-cooled host (Phase 4 baselines were captured on a hotter host). Phase 5 only touches `replay.rs` / `introspection.rs` / `learning_history.rs`, which `graph_benchmarks` does not exercise — observed drift is environmental noise, not Phase 5 cost. Other bench suites (`memory_benchmarks`, `ner_benchmarks`, `cognitive_benchmarks`) are blocked by pre-existing upstream/env issues unrelated to Phase 5: cdylib panic-strategy collision when multiple benches share the lib build, missing `libonnxruntime.dylib` on this host, and stale upstream code in `cognitive_benchmarks.rs` that no longer matches the current API surface (5 E0277 errors). Same caveat applied at Phase 0 for `relevance_benchmarks` and is documented in `docs/baselines.md`.
 
+### 2026-04-29 — Tier 2 Phase 0: pyo3 0.23 deprecation cleanup + LLM-parser config fix
+
+**Files touched:**
+- `src/python.rs` — added `use pyo3::conversion::IntoPyObjectExt;`; migrated all 164 `value.into_py(py)` deprecation sites to `value.into_py_any(py)?` (pyo3 0.24's `IntoPyObjectExt` extension method). Adjusted seven `.map(|...| { ... })` closures (the `to_py_list` builder, three `neuron`-builder closures, the `evt` event closure, and the `mem` / `assoc` consolidation-report closures) to return `PyResult<HashMap<...>>` and propagate via `.collect::<PyResult<Vec<_>>>()?` so the new `?` propagation type-checks. Replaced one `Option::map(...)?.unwrap_or_else(py.None())` site with a `match` arm because `Option::map` doesn't compose with `?`.
+- `src/query_parsing/mod.rs` — replaced the stale `llm_model_path` / `llm_threads` / `llm_context_size` fields on `ParserConfig` (a leftover from pre-HTTP llama.cpp-based `LlmParser`) with `llm_endpoint` / `llm_model` to match the current `LlmParser::new(endpoint: &str, model: &str)` signature. Updated `ParserConfig::llm()` constructor and the `create_parser()` call site accordingly. Removes the 3-arg-vs-2-arg signature drift that blocked `cargo clippy --all-targets` and `cargo build --features llm-parser`.
+
+**Summary:** Tier 1 fallout cleanup. Tier 1 reported `cargo clippy --features python -- -D warnings` blocked by ~347 pyo3 0.23 deprecation errors and `cargo build --features llm-parser` blocked by stale `LlmParser::new()` arity. Phase 0 of Tier 2 unblocks both gates so subsequent Tier 2 phases can extend the Python bindings without re-cleaning rot.
+
+**Verification:**
+- `cargo check --features python --lib` — clean (was 164 deprecation warnings before this phase, 0 after).
+- `cargo check --features llm-parser --lib` — clean (was 2 errors before this phase, 0 after).
+- `cargo check --lib` — clean (no regression on default-feature builds).
+- `cargo build --release --bench cognitive_benchmarks` — clean (was 5 E0277 errors at Tier 1, now compiles with only style warnings).
+- `cargo test --release --no-fail-fast` — **1180 passed, 0 failed, 0 ignored** across 30 suites (Tier 1 baseline preserved exactly).
+- `cargo fmt --check` — clean.
+- `cargo clippy --features python --lib` — 1 new lint surfaced (`clippy::too_many_arguments` on `record_decision`, 8/7 args, a pyo3 binding signature decision and not deprecation-related); 145 inherited upstream warnings carry forward unchanged. Net regression on python feature: zero deprecation warnings, +1 unrelated style lint.
+
+**Compatibility:** Behavior-preserving migration. `into_py(py)` and `into_py_any(py)?` produce equivalent `PyObject` outputs for every type used in this file (numbers, strings, vecs, hashmaps, datetimes); the `?` cascade only surfaces if the underlying conversion truly fails, which it cannot for the types in use. The `ParserConfig` struct shape changes from three `llm_*` fields to two, but the only caller is the in-module `create_parser()`; no public-API breakage observed in `git grep`. The `llm-parser` feature was already broken at Tier 1 — this phase fixes it. Bench infrastructure (`graph_benchmarks` panic-strategy collision, `relevance_benchmarks` / `streaming_benchmarks` / `memory_benchmarks` E0061/E0308 signature drift) remains as documented upstream rot — not in scope for Phase 0.
+
 ### 2026-04-27 — Tier 1 release (v0.1.90-ce.tier1)
 
 **Files touched:**

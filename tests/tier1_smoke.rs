@@ -16,16 +16,16 @@
 //! expected output materialises end-to-end.
 
 use shodh_memory::chrono::{Duration, Utc};
-use shodh_memory::decay::{decay_factor_with_params, hybrid_decay_factor, DecayConfig, DecayParams};
+use shodh_memory::decay::{
+    decay_factor_with_params, hybrid_decay_factor, DecayConfig, DecayParams,
+};
 use shodh_memory::graph_memory::{
     EdgeCategory, EdgeTier, EntityLabel, EntityNode, GraphMemory, LtpStatus, RelationType,
     RelationshipEdge,
 };
 use shodh_memory::memory::introspection::{ConsolidationEvent, InterferenceType};
 use shodh_memory::memory::replay::{ContradictionPolicy, InterferenceDetector};
-use shodh_memory::memory::{
-    Experience, ExperienceType, Memory, MemoryId, NodeType, QueryBuilder,
-};
+use shodh_memory::memory::{Experience, ExperienceType, Memory, MemoryId, NodeType, QueryBuilder};
 use shodh_memory::uuid::Uuid;
 
 fn make_memory(content: &str, et: ExperienceType) -> Memory {
@@ -157,15 +157,24 @@ fn tier1_phase3_decay_floor_clamps_long_inactivity() {
     let clamped_long = decay_factor_with_params(365.0, &with_floor);
     let upstream_long = hybrid_decay_factor(365.0, false);
 
-    assert!((raw_long - upstream_long).abs() < 1e-6, "no-floor params must match upstream curve");
-    assert!(clamped_long >= 0.40 - 1e-6, "floor clamps long-inactivity decay");
+    assert!(
+        (raw_long - upstream_long).abs() < 1e-6,
+        "no-floor params must match upstream curve"
+    );
+    assert!(
+        clamped_long >= 0.40 - 1e-6,
+        "floor clamps long-inactivity decay"
+    );
     assert!(raw_long < 0.40, "raw decay would drop below the floor");
 
     // A freshly-touched memory must NOT be lifted by the floor — the floor
     // is a clamp on long-inactivity decay, never a bonus on recent items.
     let raw_fresh = decay_factor_with_params(0.5, &no_floor);
     let clamped_fresh = decay_factor_with_params(0.5, &with_floor);
-    assert!((raw_fresh - clamped_fresh).abs() < 1e-6, "floor must not lift fresh memory");
+    assert!(
+        (raw_fresh - clamped_fresh).abs() < 1e-6,
+        "floor must not lift fresh memory"
+    );
 }
 
 #[test]
@@ -196,9 +205,8 @@ fn tier1_phase4_ontology_tags_filter_via_query_builder() {
     )
     .with_ontology(NodeType::Concept, vec!["financial".into(), "macro".into()]);
 
-    let pe_compression =
-        make_memory("P/E compression in late cycle", ExperienceType::Pattern)
-            .with_ontology(NodeType::Pattern, vec!["financial".into()]);
+    let pe_compression = make_memory("P/E compression in late cycle", ExperienceType::Pattern)
+        .with_ontology(NodeType::Pattern, vec!["financial".into()]);
 
     let cpi_print = make_memory("CPI print 0.4% MoM", ExperienceType::Observation)
         .with_ontology(NodeType::Signal, vec!["financial".into()]);
@@ -293,12 +301,7 @@ fn tier1_end_to_end_phases_compose() {
         .add_entity(make_entity("Pivot denied", EntityLabel::Concept, 0.8))
         .expect("add b");
     graph
-        .add_relationship(make_edge(
-            pivot_a,
-            pivot_b,
-            RelationType::Contradicts,
-            0.95,
-        ))
+        .add_relationship(make_edge(pivot_a, pivot_b, RelationType::Contradicts, 0.95))
         .expect("contradicts edge");
 
     // (2) Phase 3 — pull decay params for the Causal category to verify the
@@ -312,10 +315,7 @@ fn tier1_end_to_end_phases_compose() {
         "Two contradictory Fed pivot signals this week",
         ExperienceType::Learning,
     )
-    .with_ontology(
-        NodeType::Concept,
-        vec!["financial".into(), "macro".into()],
-    );
+    .with_ontology(NodeType::Concept, vec!["financial".into(), "macro".into()]);
     let q = QueryBuilder::default()
         .node_types(vec![NodeType::Concept])
         .domain_tags(vec!["macro".into()])

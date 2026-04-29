@@ -8,6 +8,7 @@
 // - Failure tracking and recovery patterns
 // - Learned behaviors and predictions
 
+use pyo3::conversion::IntoPyObjectExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -1028,59 +1029,62 @@ impl PyMemorySystem {
         Python::with_gil(|py| {
             let mut result = HashMap::new();
 
-            result.insert("total_memories".to_string(), total_memories.into_py(py));
+            result.insert(
+                "total_memories".to_string(),
+                total_memories.into_py_any(py)?,
+            );
 
             // Convert items to list of dicts
-            let to_py_list = |items: Vec<(String, String, f32, String)>| -> PyObject {
+            let to_py_list = |items: Vec<(String, String, f32, String)>| -> PyResult<PyObject> {
                 let list: Vec<HashMap<String, PyObject>> = items
                     .into_iter()
                     .map(|(id, content, importance, created_at)| {
                         let mut item = HashMap::new();
-                        item.insert("id".to_string(), id.into_py(py));
-                        item.insert("content".to_string(), content.into_py(py));
-                        item.insert("importance".to_string(), importance.into_py(py));
-                        item.insert("created_at".to_string(), created_at.into_py(py));
-                        item
+                        item.insert("id".to_string(), id.into_py_any(py)?);
+                        item.insert("content".to_string(), content.into_py_any(py)?);
+                        item.insert("importance".to_string(), importance.into_py_any(py)?);
+                        item.insert("created_at".to_string(), created_at.into_py_any(py)?);
+                        Ok(item)
                     })
-                    .collect();
-                list.into_py(py)
+                    .collect::<PyResult<_>>()?;
+                list.into_py_any(py)
             };
 
             result.insert(
                 "decisions".to_string(),
                 if include_decisions {
-                    to_py_list(sort_and_truncate(decisions, max_items))
+                    to_py_list(sort_and_truncate(decisions, max_items))?
                 } else {
-                    Vec::<HashMap<String, PyObject>>::new().into_py(py)
+                    Vec::<HashMap<String, PyObject>>::new().into_py_any(py)?
                 },
             );
 
             result.insert(
                 "learnings".to_string(),
                 if include_learnings {
-                    to_py_list(sort_and_truncate(learnings, max_items))
+                    to_py_list(sort_and_truncate(learnings, max_items))?
                 } else {
-                    Vec::<HashMap<String, PyObject>>::new().into_py(py)
+                    Vec::<HashMap<String, PyObject>>::new().into_py_any(py)?
                 },
             );
 
             result.insert(
                 "context".to_string(),
                 if include_context {
-                    to_py_list(sort_and_truncate(context, max_items))
+                    to_py_list(sort_and_truncate(context, max_items))?
                 } else {
-                    Vec::<HashMap<String, PyObject>>::new().into_py(py)
+                    Vec::<HashMap<String, PyObject>>::new().into_py_any(py)?
                 },
             );
 
             result.insert(
                 "patterns".to_string(),
-                to_py_list(sort_and_truncate(patterns, max_items)),
+                to_py_list(sort_and_truncate(patterns, max_items))?,
             );
 
             result.insert(
                 "errors".to_string(),
-                to_py_list(sort_and_truncate(errors, 3.min(max_items))),
+                to_py_list(sort_and_truncate(errors, 3.min(max_items)))?,
             );
 
             Ok(result)
@@ -1226,12 +1230,15 @@ impl PyMemorySystem {
 
         Python::with_gil(|py| {
             let mut dict = HashMap::new();
-            dict.insert("node_count".to_string(), stats.node_count.into_py(py));
-            dict.insert("edge_count".to_string(), stats.edge_count.into_py(py));
-            dict.insert("avg_strength".to_string(), stats.avg_strength.into_py(py));
+            dict.insert("node_count".to_string(), stats.node_count.into_py_any(py)?);
+            dict.insert("edge_count".to_string(), stats.edge_count.into_py_any(py)?);
+            dict.insert(
+                "avg_strength".to_string(),
+                stats.avg_strength.into_py_any(py)?,
+            );
             dict.insert(
                 "potentiated_count".to_string(),
-                stats.potentiated_count.into_py(py),
+                stats.potentiated_count.into_py_any(py)?,
             );
             Ok(dict)
         })
@@ -1353,7 +1360,7 @@ impl PyMemorySystem {
                     total_activation += m.activation();
                     total_importance += m.importance();
                     let mut neuron = HashMap::new();
-                    neuron.insert("id".to_string(), m.id.0.to_string().into_py(py));
+                    neuron.insert("id".to_string(), m.id.0.to_string().into_py_any(py)?);
                     neuron.insert(
                         "content_preview".to_string(),
                         m.experience
@@ -1361,22 +1368,22 @@ impl PyMemorySystem {
                             .chars()
                             .take(100)
                             .collect::<String>()
-                            .into_py(py),
+                            .into_py_any(py)?,
                     );
-                    neuron.insert("activation".to_string(), m.activation().into_py(py));
-                    neuron.insert("importance".to_string(), m.importance().into_py(py));
-                    neuron.insert("tier".to_string(), "working".into_py(py));
+                    neuron.insert("activation".to_string(), m.activation().into_py_any(py)?);
+                    neuron.insert("importance".to_string(), m.importance().into_py_any(py)?);
+                    neuron.insert("tier".to_string(), "working".into_py_any(py)?);
                     neuron.insert(
                         "access_count".to_string(),
-                        m.metadata_snapshot().access_count.into_py(py),
+                        m.metadata_snapshot().access_count.into_py_any(py)?,
                     );
                     neuron.insert(
                         "created_at".to_string(),
-                        m.created_at.to_rfc3339().into_py(py),
+                        m.created_at.to_rfc3339().into_py_any(py)?,
                     );
-                    neuron
+                    Ok(neuron)
                 })
-                .collect();
+                .collect::<PyResult<Vec<_>>>()?;
 
             // Convert session memories (Vec<Arc<Memory>>) to neurons
             let session_neurons: Vec<HashMap<String, PyObject>> = session_memories
@@ -1385,7 +1392,7 @@ impl PyMemorySystem {
                     total_activation += m.activation();
                     total_importance += m.importance();
                     let mut neuron = HashMap::new();
-                    neuron.insert("id".to_string(), m.id.0.to_string().into_py(py));
+                    neuron.insert("id".to_string(), m.id.0.to_string().into_py_any(py)?);
                     neuron.insert(
                         "content_preview".to_string(),
                         m.experience
@@ -1393,22 +1400,22 @@ impl PyMemorySystem {
                             .chars()
                             .take(100)
                             .collect::<String>()
-                            .into_py(py),
+                            .into_py_any(py)?,
                     );
-                    neuron.insert("activation".to_string(), m.activation().into_py(py));
-                    neuron.insert("importance".to_string(), m.importance().into_py(py));
-                    neuron.insert("tier".to_string(), "session".into_py(py));
+                    neuron.insert("activation".to_string(), m.activation().into_py_any(py)?);
+                    neuron.insert("importance".to_string(), m.importance().into_py_any(py)?);
+                    neuron.insert("tier".to_string(), "session".into_py_any(py)?);
                     neuron.insert(
                         "access_count".to_string(),
-                        m.metadata_snapshot().access_count.into_py(py),
+                        m.metadata_snapshot().access_count.into_py_any(py)?,
                     );
                     neuron.insert(
                         "created_at".to_string(),
-                        m.created_at.to_rfc3339().into_py(py),
+                        m.created_at.to_rfc3339().into_py_any(py)?,
                     );
-                    neuron
+                    Ok(neuron)
                 })
-                .collect();
+                .collect::<PyResult<Vec<_>>>()?;
 
             // Convert longterm memories (Vec<Memory>) to neurons
             let longterm_neurons: Vec<HashMap<String, PyObject>> = longterm_memories
@@ -1417,7 +1424,7 @@ impl PyMemorySystem {
                     total_activation += m.activation();
                     total_importance += m.importance();
                     let mut neuron = HashMap::new();
-                    neuron.insert("id".to_string(), m.id.0.to_string().into_py(py));
+                    neuron.insert("id".to_string(), m.id.0.to_string().into_py_any(py)?);
                     neuron.insert(
                         "content_preview".to_string(),
                         m.experience
@@ -1425,50 +1432,62 @@ impl PyMemorySystem {
                             .chars()
                             .take(100)
                             .collect::<String>()
-                            .into_py(py),
+                            .into_py_any(py)?,
                     );
-                    neuron.insert("activation".to_string(), m.activation().into_py(py));
-                    neuron.insert("importance".to_string(), m.importance().into_py(py));
-                    neuron.insert("tier".to_string(), "longterm".into_py(py));
+                    neuron.insert("activation".to_string(), m.activation().into_py_any(py)?);
+                    neuron.insert("importance".to_string(), m.importance().into_py_any(py)?);
+                    neuron.insert("tier".to_string(), "longterm".into_py_any(py)?);
                     neuron.insert(
                         "access_count".to_string(),
-                        m.metadata_snapshot().access_count.into_py(py),
+                        m.metadata_snapshot().access_count.into_py_any(py)?,
                     );
                     neuron.insert(
                         "created_at".to_string(),
-                        m.created_at.to_rfc3339().into_py(py),
+                        m.created_at.to_rfc3339().into_py_any(py)?,
                     );
-                    neuron
+                    Ok(neuron)
                 })
-                .collect();
+                .collect::<PyResult<Vec<_>>>()?;
 
-            result.insert("working_memory".to_string(), working_neurons.into_py(py));
-            result.insert("session_memory".to_string(), session_neurons.into_py(py));
-            result.insert("longterm_memory".to_string(), longterm_neurons.into_py(py));
+            result.insert(
+                "working_memory".to_string(),
+                working_neurons.into_py_any(py)?,
+            );
+            result.insert(
+                "session_memory".to_string(),
+                session_neurons.into_py_any(py)?,
+            );
+            result.insert(
+                "longterm_memory".to_string(),
+                longterm_neurons.into_py_any(py)?,
+            );
 
             // Calculate stats
             let mut stats = HashMap::new();
-            stats.insert("total_memories".to_string(), total_count.into_py(py));
-            stats.insert("working_count".to_string(), working_count.into_py(py));
-            stats.insert("session_count".to_string(), session_count.into_py(py));
-            stats.insert("longterm_count".to_string(), longterm_count.into_py(py));
+            stats.insert("total_memories".to_string(), total_count.into_py_any(py)?);
+            stats.insert("working_count".to_string(), working_count.into_py_any(py)?);
+            stats.insert("session_count".to_string(), session_count.into_py_any(py)?);
+            stats.insert(
+                "longterm_count".to_string(),
+                longterm_count.into_py_any(py)?,
+            );
             stats.insert(
                 "avg_activation".to_string(),
                 if total_count > 0 {
-                    (total_activation / total_count as f32).into_py(py)
+                    (total_activation / total_count as f32).into_py_any(py)?
                 } else {
-                    0.0f32.into_py(py)
+                    0.0f32.into_py_any(py)?
                 },
             );
             stats.insert(
                 "avg_importance".to_string(),
                 if total_count > 0 {
-                    (total_importance / total_count as f32).into_py(py)
+                    (total_importance / total_count as f32).into_py_any(py)?
                 } else {
-                    0.0f32.into_py(py)
+                    0.0f32.into_py_any(py)?
                 },
             );
-            result.insert("stats".to_string(), stats.into_py(py));
+            result.insert("stats".to_string(), stats.into_py_any(py)?);
 
             Ok(result)
         })
@@ -1516,65 +1535,68 @@ impl PyMemorySystem {
             let mut period = HashMap::new();
             period.insert(
                 "start".to_string(),
-                report.period.start.to_rfc3339().into_py(py),
+                report.period.start.to_rfc3339().into_py_any(py)?,
             );
             period.insert(
                 "end".to_string(),
-                report.period.end.to_rfc3339().into_py(py),
+                report.period.end.to_rfc3339().into_py_any(py)?,
             );
-            result.insert("period".to_string(), period.into_py(py));
+            result.insert("period".to_string(), period.into_py_any(py)?);
 
             // Statistics (from report.statistics)
             let mut stats = HashMap::new();
             stats.insert(
                 "total_memories".to_string(),
-                report.statistics.total_memories.into_py(py),
+                report.statistics.total_memories.into_py_any(py)?,
             );
             stats.insert(
                 "memories_strengthened".to_string(),
-                report.statistics.memories_strengthened.into_py(py),
+                report.statistics.memories_strengthened.into_py_any(py)?,
             );
             stats.insert(
                 "memories_decayed".to_string(),
-                report.statistics.memories_decayed.into_py(py),
+                report.statistics.memories_decayed.into_py_any(py)?,
             );
             stats.insert(
                 "memories_at_risk".to_string(),
-                report.statistics.memories_at_risk.into_py(py),
+                report.statistics.memories_at_risk.into_py_any(py)?,
             );
             stats.insert(
                 "edges_formed".to_string(),
-                report.statistics.edges_formed.into_py(py),
+                report.statistics.edges_formed.into_py_any(py)?,
             );
             stats.insert(
                 "edges_strengthened".to_string(),
-                report.statistics.edges_strengthened.into_py(py),
+                report.statistics.edges_strengthened.into_py_any(py)?,
             );
             stats.insert(
                 "edges_potentiated".to_string(),
-                report.statistics.edges_potentiated.into_py(py),
+                report.statistics.edges_potentiated.into_py_any(py)?,
             );
             stats.insert(
                 "edges_pruned".to_string(),
-                report.statistics.edges_pruned.into_py(py),
+                report.statistics.edges_pruned.into_py_any(py)?,
             );
             stats.insert(
                 "facts_extracted".to_string(),
-                report.statistics.facts_extracted.into_py(py),
+                report.statistics.facts_extracted.into_py_any(py)?,
             );
             stats.insert(
                 "facts_reinforced".to_string(),
-                report.statistics.facts_reinforced.into_py(py),
+                report.statistics.facts_reinforced.into_py_any(py)?,
             );
             stats.insert(
                 "maintenance_cycles".to_string(),
-                report.statistics.maintenance_cycles.into_py(py),
+                report.statistics.maintenance_cycles.into_py_any(py)?,
             );
             stats.insert(
                 "total_maintenance_duration_ms".to_string(),
-                report.statistics.total_maintenance_duration_ms.into_py(py),
+                report
+                    .statistics
+                    .total_maintenance_duration_ms
+                    .into_py_any(py)?,
             );
-            result.insert("stats".to_string(), stats.into_py(py));
+            result.insert("stats".to_string(), stats.into_py_any(py)?);
 
             // Event count (sum of all event lists)
             let event_count = report.strengthened_memories.len()
@@ -1585,7 +1607,7 @@ impl PyMemorySystem {
                 + report.pruned_associations.len()
                 + report.extracted_facts.len()
                 + report.reinforced_facts.len();
-            result.insert("event_count".to_string(), event_count.into_py(py));
+            result.insert("event_count".to_string(), event_count.into_py_any(py)?);
 
             // Strengthened memories
             let strengthened: Vec<HashMap<String, PyObject>> = report
@@ -1593,30 +1615,36 @@ impl PyMemorySystem {
                 .iter()
                 .map(|m| {
                     let mut mem = HashMap::new();
-                    mem.insert("memory_id".to_string(), m.memory_id.clone().into_py(py));
+                    mem.insert(
+                        "memory_id".to_string(),
+                        m.memory_id.clone().into_py_any(py)?,
+                    );
                     mem.insert(
                         "content_preview".to_string(),
-                        m.content_preview.clone().into_py(py),
+                        m.content_preview.clone().into_py_any(py)?,
                     );
                     mem.insert(
                         "activation_before".to_string(),
-                        m.activation_before.into_py(py),
+                        m.activation_before.into_py_any(py)?,
                     );
                     mem.insert(
                         "activation_after".to_string(),
-                        m.activation_after.into_py(py),
+                        m.activation_after.into_py_any(py)?,
                     );
-                    mem.insert("reason".to_string(), m.change_reason.clone().into_py(py));
+                    mem.insert(
+                        "reason".to_string(),
+                        m.change_reason.clone().into_py_any(py)?,
+                    );
                     mem.insert(
                         "timestamp".to_string(),
-                        m.timestamp.to_rfc3339().into_py(py),
+                        m.timestamp.to_rfc3339().into_py_any(py)?,
                     );
-                    mem
+                    Ok(mem)
                 })
-                .collect();
+                .collect::<PyResult<Vec<_>>>()?;
             result.insert(
                 "strengthened_memories".to_string(),
-                strengthened.into_py(py),
+                strengthened.into_py_any(py)?,
             );
 
             // Decayed memories
@@ -1625,28 +1653,31 @@ impl PyMemorySystem {
                 .iter()
                 .map(|m| {
                     let mut mem = HashMap::new();
-                    mem.insert("memory_id".to_string(), m.memory_id.clone().into_py(py));
+                    mem.insert(
+                        "memory_id".to_string(),
+                        m.memory_id.clone().into_py_any(py)?,
+                    );
                     mem.insert(
                         "content_preview".to_string(),
-                        m.content_preview.clone().into_py(py),
+                        m.content_preview.clone().into_py_any(py)?,
                     );
                     mem.insert(
                         "activation_before".to_string(),
-                        m.activation_before.into_py(py),
+                        m.activation_before.into_py_any(py)?,
                     );
                     mem.insert(
                         "activation_after".to_string(),
-                        m.activation_after.into_py(py),
+                        m.activation_after.into_py_any(py)?,
                     );
-                    mem.insert("at_risk".to_string(), m.at_risk.into_py(py));
+                    mem.insert("at_risk".to_string(), m.at_risk.into_py_any(py)?);
                     mem.insert(
                         "timestamp".to_string(),
-                        m.timestamp.to_rfc3339().into_py(py),
+                        m.timestamp.to_rfc3339().into_py_any(py)?,
                     );
-                    mem
+                    Ok(mem)
                 })
-                .collect();
-            result.insert("decayed_memories".to_string(), decayed.into_py(py));
+                .collect::<PyResult<Vec<_>>>()?;
+            result.insert("decayed_memories".to_string(), decayed.into_py_any(py)?);
 
             // Formed associations
             let formed: Vec<HashMap<String, PyObject>> = report
@@ -1656,22 +1687,22 @@ impl PyMemorySystem {
                     let mut assoc = HashMap::new();
                     assoc.insert(
                         "from_memory_id".to_string(),
-                        a.from_memory_id.clone().into_py(py),
+                        a.from_memory_id.clone().into_py_any(py)?,
                     );
                     assoc.insert(
                         "to_memory_id".to_string(),
-                        a.to_memory_id.clone().into_py(py),
+                        a.to_memory_id.clone().into_py_any(py)?,
                     );
-                    assoc.insert("strength".to_string(), a.strength_after.into_py(py));
-                    assoc.insert("reason".to_string(), a.reason.clone().into_py(py));
+                    assoc.insert("strength".to_string(), a.strength_after.into_py_any(py)?);
+                    assoc.insert("reason".to_string(), a.reason.clone().into_py_any(py)?);
                     assoc.insert(
                         "timestamp".to_string(),
-                        a.timestamp.to_rfc3339().into_py(py),
+                        a.timestamp.to_rfc3339().into_py_any(py)?,
                     );
-                    assoc
+                    Ok(assoc)
                 })
-                .collect();
-            result.insert("formed_associations".to_string(), formed.into_py(py));
+                .collect::<PyResult<Vec<_>>>()?;
+            result.insert("formed_associations".to_string(), formed.into_py_any(py)?);
 
             // Pruned associations
             let pruned: Vec<HashMap<String, PyObject>> = report
@@ -1681,25 +1712,25 @@ impl PyMemorySystem {
                     let mut assoc = HashMap::new();
                     assoc.insert(
                         "from_memory_id".to_string(),
-                        a.from_memory_id.clone().into_py(py),
+                        a.from_memory_id.clone().into_py_any(py)?,
                     );
                     assoc.insert(
                         "to_memory_id".to_string(),
-                        a.to_memory_id.clone().into_py(py),
+                        a.to_memory_id.clone().into_py_any(py)?,
                     );
                     assoc.insert(
                         "final_strength".to_string(),
-                        a.strength_before.unwrap_or(0.0).into_py(py),
+                        a.strength_before.unwrap_or(0.0).into_py_any(py)?,
                     );
-                    assoc.insert("reason".to_string(), a.reason.clone().into_py(py));
+                    assoc.insert("reason".to_string(), a.reason.clone().into_py_any(py)?);
                     assoc.insert(
                         "timestamp".to_string(),
-                        a.timestamp.to_rfc3339().into_py(py),
+                        a.timestamp.to_rfc3339().into_py_any(py)?,
                     );
-                    assoc
+                    Ok(assoc)
                 })
-                .collect();
-            result.insert("pruned_associations".to_string(), pruned.into_py(py));
+                .collect::<PyResult<Vec<_>>>()?;
+            result.insert("pruned_associations".to_string(), pruned.into_py_any(py)?);
 
             Ok(result)
         })
@@ -1728,14 +1759,17 @@ impl PyMemorySystem {
                 .iter()
                 .map(|event| {
                     let mut evt = HashMap::new();
-                    evt.insert("event_type".to_string(), format!("{:?}", event).into_py(py));
+                    evt.insert(
+                        "event_type".to_string(),
+                        format!("{:?}", event).into_py_any(py)?,
+                    );
                     evt.insert(
                         "timestamp".to_string(),
-                        event.timestamp().to_rfc3339().into_py(py),
+                        event.timestamp().to_rfc3339().into_py_any(py)?,
                     );
-                    evt
+                    Ok(evt)
                 })
-                .collect();
+                .collect::<PyResult<Vec<_>>>()?;
             Ok(result)
         })
     }
@@ -1886,36 +1920,40 @@ impl PyMemorySystem {
                 .into_iter()
                 .map(|(m, score, reason)| {
                     let mut mem = HashMap::new();
-                    mem.insert("id".to_string(), m.id.0.to_string().into_py(py));
+                    mem.insert("id".to_string(), m.id.0.to_string().into_py_any(py)?);
                     mem.insert(
                         "content".to_string(),
-                        m.experience.content.clone().into_py(py),
+                        m.experience.content.clone().into_py_any(py)?,
                     );
                     mem.insert(
                         "memory_type".to_string(),
-                        format!("{:?}", m.experience.experience_type).into_py(py),
+                        format!("{:?}", m.experience.experience_type).into_py_any(py)?,
                     );
-                    mem.insert("importance".to_string(), m.importance().into_py(py));
-                    mem.insert("relevance_score".to_string(), score.into_py(py));
-                    mem.insert("relevance_reason".to_string(), reason.into_py(py));
+                    mem.insert("importance".to_string(), m.importance().into_py_any(py)?);
+                    mem.insert("relevance_score".to_string(), score.into_py_any(py)?);
+                    mem.insert("relevance_reason".to_string(), reason.into_py_any(py)?);
                     mem.insert(
                         "created_at".to_string(),
-                        m.created_at.to_rfc3339().into_py(py),
+                        m.created_at.to_rfc3339().into_py_any(py)?,
                     );
-                    mem.insert("tags".to_string(), m.experience.tags.clone().into_py(py));
-                    mem
+                    mem.insert(
+                        "tags".to_string(),
+                        m.experience.tags.clone().into_py_any(py)?,
+                    );
+                    Ok(mem)
                 })
-                .collect();
+                .collect::<PyResult<Vec<_>>>()?;
 
             let count = memories_list.len();
-            result.insert("memories".to_string(), memories_list.into_py(py));
-            result.insert("count".to_string(), count.into_py(py));
-            result.insert("latency_ms".to_string(), latency_ms.into_py(py));
+            result.insert("memories".to_string(), memories_list.into_py_any(py)?);
+            result.insert("count".to_string(), count.into_py_any(py)?);
+            result.insert("latency_ms".to_string(), latency_ms.into_py_any(py)?);
             result.insert(
                 "ingested_id".to_string(),
-                ingested_id
-                    .map(|id| id.into_py(py))
-                    .unwrap_or_else(|| py.None()),
+                match ingested_id {
+                    Some(id) => id.into_py_any(py)?,
+                    None => py.None(),
+                },
             );
             result.insert(
                 "config".to_string(),
@@ -1923,14 +1961,17 @@ impl PyMemorySystem {
                     let mut cfg = HashMap::new();
                     cfg.insert(
                         "semantic_threshold".to_string(),
-                        semantic_threshold.into_py(py),
+                        semantic_threshold.into_py_any(py)?,
                     );
-                    cfg.insert("max_results".to_string(), max_results.into_py(py));
-                    cfg.insert("recency_weight".to_string(), recency_weight.into_py(py));
-                    cfg.insert("auto_ingest".to_string(), auto_ingest.into_py(py));
+                    cfg.insert("max_results".to_string(), max_results.into_py_any(py)?);
+                    cfg.insert(
+                        "recency_weight".to_string(),
+                        recency_weight.into_py_any(py)?,
+                    );
+                    cfg.insert("auto_ingest".to_string(), auto_ingest.into_py_any(py)?);
                     cfg
                 }
-                .into_py(py),
+                .into_py_any(py)?,
             );
 
             Ok(result)
@@ -1956,17 +1997,17 @@ impl PyMemorySystem {
             let mut result = HashMap::new();
             result.insert(
                 "total_storage".to_string(),
-                report.total_storage.into_py(py),
+                report.total_storage.into_py_any(py)?,
             );
             result.insert(
                 "total_indexed".to_string(),
-                report.total_indexed.into_py(py),
+                report.total_indexed.into_py_any(py)?,
             );
             result.insert(
                 "orphaned_count".to_string(),
-                report.orphaned_count.into_py(py),
+                report.orphaned_count.into_py_any(py)?,
             );
-            result.insert("is_healthy".to_string(), report.is_healthy.into_py(py));
+            result.insert("is_healthy".to_string(), report.is_healthy.into_py_any(py)?);
             result.insert(
                 "orphaned_ids".to_string(),
                 report
@@ -1974,7 +2015,7 @@ impl PyMemorySystem {
                     .iter()
                     .map(|id| id.0.to_string())
                     .collect::<Vec<_>>()
-                    .into_py(py),
+                    .into_py_any(py)?,
             );
             Ok(result)
         })
@@ -1995,12 +2036,12 @@ impl PyMemorySystem {
 
         Python::with_gil(|py| {
             let mut result = HashMap::new();
-            result.insert("total_storage".to_string(), total_storage.into_py(py));
-            result.insert("total_indexed".to_string(), total_indexed.into_py(py));
-            result.insert("repaired".to_string(), repaired.into_py(py));
-            result.insert("failed".to_string(), failed.into_py(py));
-            result.insert("is_healthy".to_string(), (failed == 0).into_py(py));
-            result.insert("success".to_string(), true.into_py(py));
+            result.insert("total_storage".to_string(), total_storage.into_py_any(py)?);
+            result.insert("total_indexed".to_string(), total_indexed.into_py_any(py)?);
+            result.insert("repaired".to_string(), repaired.into_py_any(py)?);
+            result.insert("failed".to_string(), failed.into_py_any(py)?);
+            result.insert("is_healthy".to_string(), (failed == 0).into_py_any(py)?);
+            result.insert("success".to_string(), true.into_py_any(py)?);
             Ok(result)
         })
     }
@@ -2016,35 +2057,35 @@ impl PyMemorySystem {
             let mut result = HashMap::new();
             result.insert(
                 "total_vectors".to_string(),
-                health.total_vectors.into_py(py),
+                health.total_vectors.into_py_any(py)?,
             );
             result.insert(
                 "deleted_count".to_string(),
-                health.deleted_count.into_py(py),
+                health.deleted_count.into_py_any(py)?,
             );
             result.insert(
                 "deletion_ratio".to_string(),
-                health.deletion_ratio.into_py(py),
+                health.deletion_ratio.into_py_any(py)?,
             );
             result.insert(
                 "needs_compaction".to_string(),
-                health.needs_compaction.into_py(py),
+                health.needs_compaction.into_py_any(py)?,
             );
             result.insert(
                 "incremental_inserts".to_string(),
-                health.incremental_inserts.into_py(py),
+                health.incremental_inserts.into_py_any(py)?,
             );
             result.insert(
                 "needs_rebuild".to_string(),
-                health.needs_rebuild.into_py(py),
+                health.needs_rebuild.into_py_any(py)?,
             );
             result.insert(
                 "rebuild_threshold".to_string(),
-                health.rebuild_threshold.into_py(py),
+                health.rebuild_threshold.into_py_any(py)?,
             );
             result.insert(
                 "healthy".to_string(),
-                (!health.needs_rebuild && !health.needs_compaction).into_py(py),
+                (!health.needs_rebuild && !health.needs_compaction).into_py_any(py)?,
             );
             Ok(result)
         })
@@ -2065,82 +2106,97 @@ fn memory_to_dict(_py: Python, memory: &Memory) -> PyResult<HashMap<String, PyOb
         let mut dict = HashMap::new();
 
         // Core fields
-        dict.insert("id".to_string(), memory.id.0.to_string().into_py(py));
+        dict.insert("id".to_string(), memory.id.0.to_string().into_py_any(py)?);
         dict.insert(
             "content".to_string(),
-            memory.experience.content.clone().into_py(py),
+            memory.experience.content.clone().into_py_any(py)?,
         );
         dict.insert(
             "experience_type".to_string(),
-            format!("{:?}", memory.experience.experience_type).into_py(py),
+            format!("{:?}", memory.experience.experience_type).into_py_any(py)?,
         );
         dict.insert(
             "entities".to_string(),
-            memory.experience.entities.clone().into_py(py),
+            memory.experience.entities.clone().into_py_any(py)?,
         );
         dict.insert(
             "metadata".to_string(),
-            memory.experience.metadata.clone().into_py(py),
+            memory.experience.metadata.clone().into_py_any(py)?,
         );
-        dict.insert("importance".to_string(), memory.importance().into_py(py));
+        dict.insert(
+            "importance".to_string(),
+            memory.importance().into_py_any(py)?,
+        );
         dict.insert(
             "access_count".to_string(),
-            memory.access_count().into_py(py),
+            memory.access_count().into_py_any(py)?,
         );
         dict.insert(
             "created_at".to_string(),
-            memory.created_at.to_rfc3339().into_py(py),
+            memory.created_at.to_rfc3339().into_py_any(py)?,
         );
         dict.insert(
             "last_accessed".to_string(),
-            memory.last_accessed().to_rfc3339().into_py(py),
+            memory.last_accessed().to_rfc3339().into_py_any(py)?,
         );
-        dict.insert("compressed".to_string(), memory.compressed.into_py(py));
+        dict.insert("compressed".to_string(), memory.compressed.into_py_any(py)?);
 
         // Robotics fields
         if let Some(ref robot_id) = memory.experience.robot_id {
-            dict.insert("robot_id".to_string(), robot_id.clone().into_py(py));
+            dict.insert("robot_id".to_string(), robot_id.clone().into_py_any(py)?);
         }
         if let Some(ref mission_id) = memory.experience.mission_id {
-            dict.insert("mission_id".to_string(), mission_id.clone().into_py(py));
+            dict.insert(
+                "mission_id".to_string(),
+                mission_id.clone().into_py_any(py)?,
+            );
         }
         if let Some(ref geo) = memory.experience.geo_location {
-            dict.insert("geo_location".to_string(), geo.to_vec().into_py(py));
+            dict.insert("geo_location".to_string(), geo.to_vec().into_py_any(py)?);
         }
         if let Some(ref pos) = memory.experience.local_position {
-            dict.insert("position".to_string(), pos.to_vec().into_py(py));
+            dict.insert("position".to_string(), pos.to_vec().into_py_any(py)?);
         }
         if let Some(heading) = memory.experience.heading {
-            dict.insert("heading".to_string(), heading.into_py(py));
+            dict.insert("heading".to_string(), heading.into_py_any(py)?);
         }
         if let Some(ref action_type) = memory.experience.action_type {
-            dict.insert("action_type".to_string(), action_type.clone().into_py(py));
+            dict.insert(
+                "action_type".to_string(),
+                action_type.clone().into_py_any(py)?,
+            );
         }
         if let Some(reward) = memory.experience.reward {
-            dict.insert("reward".to_string(), reward.into_py(py));
+            dict.insert("reward".to_string(), reward.into_py_any(py)?);
         }
         if !memory.experience.sensor_data.is_empty() {
             dict.insert(
                 "sensor_data".to_string(),
-                memory.experience.sensor_data.clone().into_py(py),
+                memory.experience.sensor_data.clone().into_py_any(py)?,
             );
         }
 
         // Decision fields
         if let Some(ref ctx) = memory.experience.decision_context {
-            dict.insert("decision_context".to_string(), ctx.clone().into_py(py));
+            dict.insert("decision_context".to_string(), ctx.clone().into_py_any(py)?);
         }
         if let Some(ref params) = memory.experience.action_params {
-            dict.insert("action_params".to_string(), params.clone().into_py(py));
+            dict.insert("action_params".to_string(), params.clone().into_py_any(py)?);
         }
         if let Some(ref outcome_type) = memory.experience.outcome_type {
-            dict.insert("outcome_type".to_string(), outcome_type.clone().into_py(py));
+            dict.insert(
+                "outcome_type".to_string(),
+                outcome_type.clone().into_py_any(py)?,
+            );
         }
         if let Some(ref details) = memory.experience.outcome_details {
-            dict.insert("outcome_details".to_string(), details.clone().into_py(py));
+            dict.insert(
+                "outcome_details".to_string(),
+                details.clone().into_py_any(py)?,
+            );
         }
         if let Some(confidence) = memory.experience.confidence {
-            dict.insert("confidence".to_string(), confidence.into_py(py));
+            dict.insert("confidence".to_string(), confidence.into_py_any(py)?);
         }
         if !memory.experience.alternatives_considered.is_empty() {
             dict.insert(
@@ -2149,63 +2205,66 @@ fn memory_to_dict(_py: Python, memory: &Memory) -> PyResult<HashMap<String, PyOb
                     .experience
                     .alternatives_considered
                     .clone()
-                    .into_py(py),
+                    .into_py_any(py)?,
             );
         }
 
         // Environment fields
         if let Some(ref weather) = memory.experience.weather {
-            dict.insert("weather".to_string(), weather.clone().into_py(py));
+            dict.insert("weather".to_string(), weather.clone().into_py_any(py)?);
         }
         if let Some(ref terrain) = memory.experience.terrain_type {
-            dict.insert("terrain_type".to_string(), terrain.clone().into_py(py));
+            dict.insert("terrain_type".to_string(), terrain.clone().into_py_any(py)?);
         }
         if let Some(ref lighting) = memory.experience.lighting {
-            dict.insert("lighting".to_string(), lighting.clone().into_py(py));
+            dict.insert("lighting".to_string(), lighting.clone().into_py_any(py)?);
         }
         if !memory.experience.nearby_agents.is_empty() {
             dict.insert(
                 "nearby_agents".to_string(),
-                memory.experience.nearby_agents.clone().into_py(py),
+                memory.experience.nearby_agents.clone().into_py_any(py)?,
             );
         }
 
         // Failure fields
         dict.insert(
             "is_failure".to_string(),
-            memory.experience.is_failure.into_py(py),
+            memory.experience.is_failure.into_py_any(py)?,
         );
         dict.insert(
             "is_anomaly".to_string(),
-            memory.experience.is_anomaly.into_py(py),
+            memory.experience.is_anomaly.into_py_any(py)?,
         );
         if let Some(ref severity) = memory.experience.severity {
-            dict.insert("severity".to_string(), severity.clone().into_py(py));
+            dict.insert("severity".to_string(), severity.clone().into_py_any(py)?);
         }
         if let Some(ref recovery) = memory.experience.recovery_action {
-            dict.insert("recovery_action".to_string(), recovery.clone().into_py(py));
+            dict.insert(
+                "recovery_action".to_string(),
+                recovery.clone().into_py_any(py)?,
+            );
         }
         if let Some(ref cause) = memory.experience.root_cause {
-            dict.insert("root_cause".to_string(), cause.clone().into_py(py));
+            dict.insert("root_cause".to_string(), cause.clone().into_py_any(py)?);
         }
 
         // Pattern fields
         if let Some(ref pattern) = memory.experience.pattern_id {
-            dict.insert("pattern_id".to_string(), pattern.clone().into_py(py));
+            dict.insert("pattern_id".to_string(), pattern.clone().into_py_any(py)?);
         }
         if let Some(ref predicted) = memory.experience.predicted_outcome {
             dict.insert(
                 "predicted_outcome".to_string(),
-                predicted.clone().into_py(py),
+                predicted.clone().into_py_any(py)?,
             );
         }
         if let Some(accurate) = memory.experience.prediction_accurate {
-            dict.insert("prediction_accurate".to_string(), accurate.into_py(py));
+            dict.insert("prediction_accurate".to_string(), accurate.into_py_any(py)?);
         }
         if !memory.experience.tags.is_empty() {
             dict.insert(
                 "tags".to_string(),
-                memory.experience.tags.clone().into_py(py),
+                memory.experience.tags.clone().into_py_any(py)?,
             );
         }
 
